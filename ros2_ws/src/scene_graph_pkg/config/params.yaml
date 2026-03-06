@@ -1,0 +1,9 @@
+scene_graph_node:
+  ros__parameters:
+    yolo_model:           "yolov8m.pt"
+    confidence:           0.45
+    near_threshold:       0.60
+    voxel_length:         0.02
+    ws_port:              8765
+    broadcast_hz:         5.0
+    mesh_every_n_frames:  30
