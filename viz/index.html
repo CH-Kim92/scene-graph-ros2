@@ -38,6 +38,8 @@
     inset: 0;
   }
 
+  
+
   /* ── HUD overlay ────────────────────────────────────────────────────────── */
   #hud {
     position: fixed;
@@ -92,7 +94,7 @@
   .spacer { flex: 1; }
 
   /* ── Mode switcher ──────────────────────────────────────────────────────── */
-  #mode-switch {
+  /* #mode-switch {
     display: flex;
     gap: 4px;
     background: rgba(10, 25, 50, 0.8);
@@ -122,8 +124,66 @@
     box-shadow: 0 0 16px rgba(64, 196, 255, 0.4);
   }
   .mode-btn[data-mode="mesh"].active  { background: var(--accent3); box-shadow: 0 0 16px rgba(234,128,252,0.4); }
-  .mode-btn[data-mode="graph"].active { background: var(--accent2); box-shadow: 0 0 16px rgba(100,255,218,0.4); }
+  .mode-btn[data-mode="graph"].active { background: var(--accent2); box-shadow: 0 0 16px rgba(100,255,218,0.4); } */
 
+
+  #mode-switch {
+  display: flex;
+  gap: 4px;
+  background: rgba(10, 25, 50, 0.8);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+#mode-switch button {
+  position: relative;
+  padding: 7px 16px;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #4dd9ff;
+  background: transparent;        /* ← removes white default */
+  border: 1px solid rgba(77, 217, 255, 0.35);
+  border-radius: 5px;
+  cursor: pointer;
+  outline: none;                   /* ← removes focus ring */
+  -webkit-appearance: none;        /* ← removes OS default styling */
+  appearance: none;                /* ← removes OS default styling */
+  transition: all 0.2s ease;
+  text-shadow: 0 0 8px rgba(77, 217, 255, 0.6);
+  overflow: hidden;
+}
+
+#mode-switch button:hover {
+  color: #fff;
+  border-color: rgba(77, 217, 255, 0.9);
+  background: rgba(77, 217, 255, 0.08);
+  box-shadow:
+    0 0 8px  rgba(77, 217, 255, 0.5),
+    0 0 20px rgba(77, 217, 255, 0.25),
+    inset 0 0 8px rgba(77, 217, 255, 0.08);
+  text-shadow: 0 0 6px #fff, 0 0 12px rgba(77, 217, 255, 1);
+}
+
+#mode-switch button.active {
+  color: #00f7ff;
+  border-color: #00f7ff;
+  background: rgba(0, 247, 255, 0.12);
+  box-shadow:
+    0 0 10px rgba(0, 247, 255, 0.7),
+    0 0 30px rgba(0, 247, 255, 0.3),
+    inset 0 0 10px rgba(0, 247, 255, 0.1);
+  text-shadow: 0 0 4px #fff, 0 0 10px #00f7ff, 0 0 20px #00f7ff;
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 10px rgba(0,247,255,0.7), 0 0 30px rgba(0,247,255,0.3), inset 0 0 10px rgba(0,247,255,0.1); }
+  50%       { box-shadow: 0 0 15px rgba(0,247,255,0.9), 0 0 45px rgba(0,247,255,0.5), inset 0 0 15px rgba(0,247,255,0.15); }
+}
   /* ── Left panel ─────────────────────────────────────────────────────────── */
   #left-panel {
     position: absolute;
@@ -369,7 +429,19 @@
 
 <!-- 3D Canvas -->
 <div id="canvas-container"></div>
-
+<canvas id="three-canvas"></canvas>
+<div id="cam-view" style="
+    position:absolute;
+    top:0; left:0; width:100%; height:100%;
+    background:#000;
+    display:none;
+    align-items:center;
+    justify-content:center;
+">
+    <img id="cam-img" style="max-width:100%; max-height:100%; object-fit:contain;" />
+</div>
+    <img id="cam-img" style="max-width:100%; max-height:100%; object-fit:contain;" />
+</div>
 <!-- HUD -->
 <div id="hud">
   <!-- Top bar -->
@@ -380,9 +452,10 @@
     <div id="status-text">Disconnected</div>
     <div class="spacer"></div>
     <div id="mode-switch">
-      <button class="mode-btn active" data-mode="rgb">RGB</button>
-      <button class="mode-btn" data-mode="mesh">Mesh</button>
-      <button class="mode-btn" data-mode="graph">Graph</button>
+      <button id="btn-rgb"   onclick="setMode(MODES.RGB)">1 · Point Cloud</button>
+      <button id="btn-mesh"  onclick="setMode(MODES.MESH)">2 · Mesh</button>
+      <button id="btn-graph" onclick="setMode(MODES.GRAPH)">3 · Graph</button>
+      <button id="btn-cam"   onclick="setMode(MODES.CAM)">4 · Camera</button>
     </div>
   </div>
 
@@ -436,7 +509,7 @@
 // Three render modes: RGB (point cloud), MESH, GRAPH
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const MODES = { RGB: 'rgb', MESH: 'mesh', GRAPH: 'graph' };
+const MODES = { RGB: 'rgb', MESH: 'mesh', GRAPH: 'graph', CAM: 'cam' };
 let currentMode = MODES.RGB;
 let ws = null;
 let animFrame = null;
@@ -527,17 +600,32 @@ window.addEventListener('keydown', e => {
 // ── Mode switching ────────────────────────────────────────────────────────────
 function setMode(mode) {
   currentMode = mode;
+  const threeCanvas = document.getElementById('three-canvas');
+  const camView = document.getElementById('cam-view');
+
+  if (mode === MODES.CAM) {
+    threeCanvas.style.display = 'none';
+    camView.style.display = 'flex';
+  } else {
+    threeCanvas.style.display = 'block';
+    camView.style.display = 'none';
+  }
+
   document.querySelectorAll('.mode-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.mode === mode);
   });
+
   rgbGroup.visible   = mode === MODES.RGB;
   meshGroup.visible  = mode === MODES.MESH;
   graphGroup.visible = mode === MODES.GRAPH;
+  // cam-view handled by display above, no Three.js group needed
+
   const leg = document.getElementById('edge-legend');
   leg.classList.toggle('visible', mode === MODES.GRAPH);
 
   if (sceneData) renderScene(sceneData);
 }
+
 document.querySelectorAll('.mode-btn').forEach(b => {
   b.addEventListener('click', () => setMode(b.dataset.mode));
 });
@@ -801,12 +889,17 @@ function makeLabel(text, colorArr = [200,200,200], scale = 1.0, fontSize = 11) {
 // Master render function
 // ─────────────────────────────────────────────────────────────────────────────
 function renderScene(data) {
-  sceneData = data;
-  if (currentMode === MODES.RGB)   renderRGB(data.pointcloud);
-  if (currentMode === MODES.MESH)  renderMesh(data.mesh);
-  if (currentMode === MODES.GRAPH) renderGraph(data.graph);
-  updateStats(data);
-  updateNodeList(data.graph);
+    if (currentMode === MODES.RGB)   renderRGB(data.pointcloud);
+    if (currentMode === MODES.MESH)  renderMesh(data.mesh);
+    if (currentMode === MODES.GRAPH) renderGraph(data.graph);
+    if (currentMode === MODES.CAM)   renderCam(data.image);   // ← add
+    updateStats(data);
+    updateNodeList(data.graph);
+}
+
+function renderCam(b64) {
+    if (!b64) return;
+    document.getElementById('cam-img').src = 'data:image/jpeg;base64,' + b64;
 }
 
 function updateStats(data) {

@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import threading, json, asyncio, time
 import websockets
+import base64
 
 try:
     from cv_bridge import CvBridge
@@ -45,11 +46,24 @@ class WebSocketServer:
         try: await ws.wait_closed()
         finally: self._clients.discard(ws)
 
+    # def broadcast(self, msg):
+    #     if not self._clients or not self._loop: return
+    #     asyncio.run_coroutine_threadsafe(
+    #         self._bcast(json.dumps(msg)), self._loop)
+
     def broadcast(self, msg):
         if not self._clients or not self._loop: return
+        def default(obj):
+            if isinstance(obj, set): return list(obj)
+            if isinstance(obj, np.ndarray): return obj.tolist()
+            if isinstance(obj, (np.integer,)): return int(obj)
+            if isinstance(obj, (np.floating,)): return float(obj)
+            if obj is ...: return None
+            if isinstance(obj, type(...)): return None
+            return str(obj)  # fallback - convert anything else to string
         asyncio.run_coroutine_threadsafe(
-            self._bcast(json.dumps(msg)), self._loop)
-
+            self._bcast(json.dumps(msg, default=default)), self._loop)
+        
     async def _bcast(self, data):
         dead = set()
         for ws in self._clients:
@@ -303,23 +317,32 @@ class SceneGraphNode(Node):
         # pcd      = self.mesher.extract_pointcloud()
         # pcd_dict = self.mesher.pointcloud_to_dict(pcd)
         # Per-object segmented point clouds (fast, no TSDF)
-        
+
         pcd_dict  = self._extract_segmented_pointcloud(rgb, depth, detections)
         mesh_dict = self._extract_segmented_mesh(rgb, depth, detections)
+        annotated = self._draw_annotations(rgb.copy(), detections)
         elapsed  = time.perf_counter() - t0
 
         self._publish_image(self._draw_annotations(rgb.copy(), detections))
         self._publish_markers(graph)
 
+        _, jpeg = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        img_b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
+
+        try:
+            ok, jpeg = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            img_b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8') if ok else ''
+        except Exception:
+            img_b64 = ''
+            
         if mesh_dict: self._latest_mesh_dict = mesh_dict
         self.ws_server.broadcast({
             "type": "scene_update",
-            "graph": graph_dict, "pointcloud": pcd_dict,
+            "graph": graph_dict,
+            "pointcloud": pcd_dict,
             "mesh": mesh_dict or self._latest_mesh_dict,
-            "stats": {"frame": self._frame_count, "detections": len(detections),
-                      "nodes": graph.number_of_nodes(),
-                      "edges": graph.number_of_edges(),
-                      "process_ms": round(elapsed*1000, 1)}
+            "image": img_b64,        # ← add this line
+            "stats": { ... }
         })
         self.get_logger().info(
             f"frame={self._frame_count} dets={len(detections)} "

@@ -30,7 +30,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - /dev:/dev
       - /run/udev:/run/udev:ro
-      - ~/fastdds_localhost.xml:/fastdds_localhost.xml:ro
+      - ../fastdds_localhost.xml:/fastdds_localhost.xml:ro
       - scene_graph_data:/data
 
     # ── Networking ──────────────────────────────────────────────
