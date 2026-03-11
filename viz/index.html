@@ -495,7 +495,13 @@
     <div class="kb-hint"><span class="key">scroll</span> zoom</div>
     <div class="kb-hint"><span class="key">1/2/3</span> modes</div>
     <div class="kb-hint"><span class="key">L</span> legend</div>
-    <input id="ws-url-input" type="text" value="ws://localhost:8766" placeholder="ws://host:8765">
+    <!-- <input id="ws-url-input" type="text" value="ws://localhost:8766" placeholder="ws://host:8765"> -->
+     <input id="ws-url-input" type="text" id="ws-url-input" placeholder="ws://host:8766">
+<script>
+  // Auto-fill with current host IP so remote users get correct address
+  document.getElementById('ws-url-input').value = 
+    'ws://' + window.location.hostname + ':8766';
+</script>
     <button id="connect-btn">Connect</button>
   </div>
 </div>
