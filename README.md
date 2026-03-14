@@ -1,119 +1,108 @@
-# 3D Scene Graph — RealSense L515 + ROS2 Jazzy + YOLOv8
+# 3D Scene Graph — GroundingDINO + SAM2 + CLIP Pipeline
 
-A real-time 3D scene understanding system that builds a semantic scene graph from live RGB-D camera data. Objects are detected, localized in 3D space, and connected by spatial relationships — all visualized in a browser-based Three.js interface.
+> **Branch:** `feature/gdino-sam2-clip`  
+> **Base branch:** `main` (YOLOv8 version)
+
+An upgrade to the original 3D scene graph system replacing fixed-class YOLOv8 detection with an open-vocabulary pipeline. You can now detect **any object by describing it in natural language** — no retraining required.
 
 ---
 
-## System Overview
+## What Changed From `main`
+
+| Component | `main` (YOLOv8) | `feature/gdino-sam2-clip` |
+|-----------|----------------|--------------------------|
+| Detection | YOLOv8m — fixed 80 COCO classes | GroundingDINO — any object by text |
+| Segmentation | Bounding box only | SAM2 — pixel-precise mask |
+| Classification | YOLO confidence score | CLIP semantic re-scoring |
+| 3D Position | Box center + depth | Mask pixels + depth (more accurate) |
+| CUDA base | 12.6 | 12.8 (Blackwell RTX 5000 support) |
+| Config | `yolo_model`, `confidence` | `text_prompt`, `gdino_box_threshold`, `clip_threshold` |
+
+---
+
+## Model Pipeline
 
 ```
-RealSense L515 (HOST)
-        │
-        ▼
- realsense_node.py          ← Python ROS2 node (runs on HOST)
-  /camera/color/image_raw
-  /camera/depth/image_rect_raw
-  /camera/color/camera_info
-        │
-        ▼ ROS2 topics (network_mode: host)
-        │
- Docker Container
-  ┌─────────────────────────────────┐
-  │  scene_graph_node               │
-  │  ├── YOLOv8 Object Detection    │
-  │  ├── 3D Point Unprojection      │
-  │  ├── Scene Graph (NetworkX)     │
-  │  └── WebSocket Broadcaster      │
-  └─────────────────────────────────┘
-        │
-        ▼ ws://localhost:8766
-  Browser (Three.js Visualizer)
-  ├── RGB Point Cloud view
-  ├── Segmented Mesh view
-  └── Scene Graph view
+RGB + Depth (RealSense L515 @ 30Hz)
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  GroundingDINO (SwinT + BERT)           │
+│  Input:  RGB image + text prompt        │
+│  Output: bounding boxes + labels        │
+│  "person, cup, laptop, chair..."        │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  SAM2 (Segment Anything Model 2)        │
+│  Input:  RGB image + bounding boxes     │
+│  Output: pixel-precise mask per object  │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  CLIP (ViT-B/32)                        │
+│  Input:  cropped image patch per object │
+│  Output: verified label + semantic score│
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  Depth Unprojection                     │
+│  Input:  SAM2 mask + depth image        │
+│  Output: 3D centroid + 3D bounding box  │
+└─────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  Scene Graph (NetworkX)                 │
+│  Nodes: detected objects with 3D pos    │
+│  Edges: spatial relations (near, above) │
+└─────────────────────────────────────────┘
+         │
+         ▼
+  WebSocket → Three.js Browser Visualizer
 ```
 
 ---
 
 ## Hardware Requirements
 
-| Component | Spec |
-|-----------|------|
+| Component | Requirement |
+|-----------|-------------|
 | Camera | Intel RealSense L515 |
-| GPU | NVIDIA GPU (tested on RTX 5070 Ti) |
+| GPU | NVIDIA RTX 5000 series (Blackwell sm_120) or older |
+| CUDA | 12.8+ |
+| RAM | 16GB+ recommended |
 | OS | Ubuntu 24.04 |
-| CPU | Intel Z890 or equivalent |
 
 ---
 
 ## Software Requirements
 
-- **ROS2 Jazzy** (installed on HOST)
-- **Docker** + **Docker Compose**
-- **NVIDIA Container Toolkit**
-- **pyrealsense2** (built from source — see Setup)
+- ROS2 Jazzy (installed on HOST)
+- Docker + Docker Compose
+- NVIDIA Container Toolkit
+- pyrealsense2 built from source (see main branch README)
 
 ---
 
 ## Setup
 
-### 1. Clone the repository
+### 1. Clone and switch to this branch
 
 ```bash
-git clone https://github.com/<your-username>/scene-graph-ros2.git ~/scene_graph
+git clone https://github.com/CH-Kim92/scene-graph-ros2.git ~/scene_graph
 cd ~/scene_graph
+git checkout feature/gdino-sam2-clip
 ```
 
-### 2. Build pyrealsense2 from source (required for L515)
+### 2. Set up pyrealsense2 on HOST (same as main branch)
 
-The pip version of pyrealsense2 does not support the L515. Build from the Intel source:
+Follow the pyrealsense2 build instructions in the main branch README. This only needs to be done once regardless of branch.
 
-```bash
-cd ~
-git clone https://github.com/IntelRealSense/librealsense.git \
-  -b v2.56.4 --depth 1 librealsense2_564
-cd librealsense2_564
-mkdir build && cd build
-
-cmake .. \
-  -DBUILD_PYTHON_BINDINGS=ON \
-  -DPYTHON_EXECUTABLE=/usr/bin/python3 \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_EXAMPLES=OFF \
-  -DBUILD_GRAPHICAL_EXAMPLES=OFF \
-  -DFORCE_RSUSB_BACKEND=ON
-
-make -j$(nproc) pyrealsense2
-```
-
-Copy the working Python bindings:
-
-```bash
-sudo mkdir -p /usr/local/lib/python3.12/site-packages
-sudo cp /usr/local/OFF/pyrealsense2*.so /usr/local/lib/python3.12/site-packages/
-```
-
-Add library path to `~/.bashrc`:
-
-```bash
-echo 'export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
-source ~/.bashrc
-```
-
-Verify L515 is detected:
-
-```bash
-LD_LIBRARY_PATH=/usr/local/lib python3 -c "
-import pyrealsense2 as rs
-ctx = rs.context()
-print('Devices:', len(ctx.devices))
-for d in ctx.devices:
-    print(' -', d.get_info(rs.camera_info.name))
-"
-# Expected: Devices: 1 / Intel RealSense L515
-```
-
-### 3. Configure FastDDS for localhost (required for HOST↔Docker ROS2 communication)
+### 3. Configure FastDDS for HOST↔Docker communication
 
 ```bash
 cat > ~/fastdds_localhost.xml << 'EOF'
@@ -155,6 +144,8 @@ cd ~/scene_graph
 docker compose -f docker/docker-compose.yml build
 ```
 
+This installs all Python dependencies including SAM2, CLIP, and transformers. Model weights (~2GB) are downloaded automatically on first run.
+
 ---
 
 ## Running the System
@@ -184,24 +175,68 @@ cd ~/scene_graph
 docker compose -f docker/docker-compose.yml up
 ```
 
-Wait for:
+**First run only** — GroundingDINO CUDA ops are compiled at startup (~5 minutes):
 ```
+Cloning GroundingDINO...
+Patching CUDA source for PyTorch 2.x...
+Compiling GroundingDINO...
+CUDA ops compiled OK
+```
+
+Wait for all three models to load:
+```
+[ObjectDetector3D] GroundingDINO ready.
+[ObjectDetector3D] SAM2 ready.
+[ObjectDetector3D] CLIP ready.
+[ObjectDetector3D] Ready. Prompt: 'person, cup, bottle, laptop...'
 [scene_graph_node]: Camera intrinsics received: fx=683.0
-[scene_graph_node]: frame=1 dets=2 nodes=2 edges=1 85ms
+[scene_graph_node]: frame=1 dets=2 nodes=2 edges=1 340ms
 ```
 
 ### Terminal 3 — Web Visualizer
 
 ```bash
 cd ~/scene_graph/viz
-python3 -m http.server 8080
+python3 -m http.server 8080 --bind 0.0.0.0
 ```
 
 Open browser: **http://localhost:8080**
 
-In the WebSocket field, enter: `ws://localhost:8766`
+Set WebSocket URL to `ws://localhost:8766` → click **Connect**
 
-Click **Connect**.
+**Share with others on same WiFi:** open `http://<your-ip>:8080` on any device.
+
+---
+
+## Changing What Objects to Detect
+
+No retraining needed — just edit the `text_prompt` in `docker/docker-compose.yml`:
+
+```yaml
+'text_prompt:=person, cup, bottle, laptop, chair, table, phone, keyboard'
+```
+
+Change to anything you want:
+```yaml
+'text_prompt:=screwdriver, robot arm, safety helmet, conveyor belt, fire extinguisher'
+```
+
+Restart Docker and it detects your new objects immediately.
+
+---
+
+## Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `text_prompt` | `person, cup, bottle...` | Objects to detect (natural language) |
+| `gdino_box_threshold` | `0.35` | GroundingDINO minimum box confidence |
+| `gdino_text_threshold` | `0.25` | GroundingDINO minimum text alignment score |
+| `clip_verify` | `true` | Enable CLIP re-classification |
+| `clip_threshold` | `0.20` | Minimum CLIP similarity score to keep detection |
+| `near_threshold` | `0.60` | Max distance (metres) to create a scene graph edge |
+| `ws_port` | `8766` | WebSocket port for browser visualizer |
+| `broadcast_hz` | `5.0` | Visualizer update rate (Hz) |
 
 ---
 
@@ -212,88 +247,46 @@ Click **Connect**.
 | `1` | RGB Point Cloud |
 | `2` | Segmented Mesh (per object) |
 | `3` | Scene Graph (nodes + edges) |
-| Mouse drag | Rotate view |
+| `4` | Live Camera (2D annotated RGB) |
+| Mouse drag | Rotate |
 | Scroll | Zoom |
 
 ---
 
-## Project Structure
+## Project Structure Changes vs `main`
 
 ```
 scene_graph/
 ├── docker/
-│   ├── Dockerfile              # CUDA + ROS2 Jazzy + ML deps
-│   └── docker-compose.yml      # Container config
-├── ros2_ws/
-│   └── src/scene_graph_pkg/
-│       ├── scene_graph_pkg/
-│       │   ├── realsense_node.py       # Camera driver (HOST)
-│       │   ├── scene_graph_node.py     # Main processing node
-│       │   ├── object_detector.py      # YOLOv8 3D detection
-│       │   ├── scene_graph_builder.py  # NetworkX graph
-│       │   └── mesh_reconstructor.py  # TSDF/Open3D
-│       ├── launch/
-│       │   └── scene_graph_nodriver.launch.py
-│       ├── setup.py
-│       └── package.xml
-└── viz/
-    └── index.html              # Three.js visualizer
+│   ├── Dockerfile              # CUDA 12.8 base + GroundingDINO/SAM2/CLIP deps
+│   ├── docker-compose.yml      # Runtime CUDA ops compilation
+│   └── patch_gdino.py          # PyTorch 2.x compatibility patch for GroundingDINO
+├── ros2_ws/src/scene_graph_pkg/
+│   ├── scene_graph_pkg/
+│   │   ├── object_detector.py  # NEW: GroundingDINO + SAM2 + CLIP pipeline
+│   │   ├── scene_graph_node.py # Updated parameters
+│   │   └── ...
+│   └── launch/
+│       └── scene_graph_nodriver.launch.py  # Updated launch args
 ```
 
 ---
 
-## Architecture Details
+## Known Issues
 
-### Camera Node (realsense_node.py)
-Runs directly on the HOST using pyrealsense2 built against librealsense 2.54.2 (the version that supports L515). Publishes standard ROS2 sensor topics at 30Hz.
-
-### Scene Graph Node (scene_graph_node.py)
-Runs inside Docker with GPU access. Pipeline per frame:
-1. **Detection**: YOLOv8m detects objects in RGB image
-2. **3D Localization**: Depth values unprojected using camera intrinsics
-3. **Graph Update**: NetworkX graph updated with object nodes and spatial edges
-4. **Point Cloud**: Per-object colored point clouds extracted from depth
-5. **WebSocket Broadcast**: JSON payload sent to browser at 5Hz
-
-### Spatial Relations
-Objects are connected by edges when their 3D distance is below a configurable threshold. Relations include: `near`, `left_of`, `right_of`, `above`, `below`, `in_front_of`, `behind`.
+- **First startup is slow (~5 min)** due to GroundingDINO CUDA ops compilation. Subsequent restarts reuse the compiled ops if the container is not removed.
+- **Processing is slower than YOLOv8** (~300-500ms per frame vs ~100ms) due to SAM2 segmentation. Reduce `broadcast_hz` if needed.
+- **RTX 5070 Ti (Blackwell)** requires the CUDA 12.8 base image. Older GPUs should still work.
 
 ---
 
-## Troubleshooting
+## Switching Back to YOLOv8 Version
 
-### Camera not detected
 ```bash
-lsusb | grep Intel   # Check USB connection
-/usr/local/bin/rs-enumerate-devices  # Should list L515
+git checkout main
+docker compose -f docker/docker-compose.yml build
+docker compose -f docker/docker-compose.yml up
 ```
-
-### ROS2 topics not flowing between HOST and Docker
-Ensure FastDDS config is set on both HOST and in docker-compose.yml:
-```bash
-echo $FASTRTPS_DEFAULT_PROFILES_FILE   # Should point to fastdds_localhost.xml
-echo $ROS_DOMAIN_ID                    # Should be 0
-```
-
-### WebSocket not connecting
-Check port 8766 is open:
-```bash
-sudo ss -tlnp | grep 8766
-```
-
-### NumPy version conflict in Docker
-```bash
-docker exec -it scene_graph bash
-/opt/venv/bin/pip install "numpy<2" "opencv-python<4.10"
-```
-
----
-
-## Known Limitations
-
-- **RTX 5070 Ti (Blackwell)**: PyTorch stable does not support sm_120. Install nightly build for full GPU acceleration
-- **L515 + ROS2**: `ros-jazzy-realsense2-camera` does not support L515 — custom Python node used instead
-- **TSDF mesh**: Disabled in favor of fast per-frame segmented mesh for better performance
 
 ---
 
