@@ -173,8 +173,8 @@ class SceneGraph3D:
             position=new_pos,
             confidence=det.confidence,
             color=det.color,
-            bbox_min=det.bbox_3d_min,
-            bbox_max=det.bbox_3d_max,
+            bbox_min=det.bbox_min,
+            bbox_max=det.bbox_max,
             frame=self._frame_id,
         )
 

@@ -1,221 +1,318 @@
 """
 object_detector.py
 ──────────────────
-YOLOv8-based 2D object detection fused with L515 depth data
-to produce 3D-localized detections with semantic labels.
-
-Outputs per-detection:
-  - label          : COCO class name
-  - confidence     : float [0,1]
-  - bbox_2d        : [x1, y1, x2, y2] pixels
-  - position_3d    : [x, y, z] meters in camera frame
-  - bbox_3d        : axis-aligned 3D bounding box corners
-  - color          : mean RGB inside bbox (for node colouring)
-  - mask_points    : sampled point cloud inside bbox (Nx3)
+Open-vocabulary 3D object detection pipeline:
+  1. Grounding DINO  – detect any object described in natural language
+  2. SAM2            – precise segmentation mask per detection
+  3. CLIP            – verify / re-classify each detection semantically
+  4. Depth fusion    – unproject mask pixels → 3D centroid + bbox
 """
 
-from __future__ import annotations
+import os
+import time
+import warnings
+warnings.filterwarnings("ignore")
+
 import numpy as np
-import cv2
 import torch
-from ultralytics import YOLO
+import cv2
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+# ── GroundingDINO ─────────────────────────────────────────────────────────────
+from groundingdino.util.inference import load_model as gdino_load_model
+from groundingdino.util.inference import predict as gdino_predict
+from groundingdino.util import box_ops
+import torchvision.transforms as T
 
-# ── Detection result container ────────────────────────────────────────────────
+# ── SAM2 ──────────────────────────────────────────────────────────────────────
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 
+# ── CLIP ──────────────────────────────────────────────────────────────────────
+import open_clip
+
+
+# ── Data classes ─────────────────────────────────────────────────────────────
 @dataclass
 class Detection3D:
-    label: str
-    confidence: float
-    class_id: int
-    bbox_2d: List[int]             # [x1,y1,x2,y2]
-    position_3d: List[float]       # [x,y,z] metres, camera frame
-    bbox_3d_min: List[float]       # [xmin, ymin, zmin]
-    bbox_3d_max: List[float]       # [xmax, ymax, zmax]
-    color: List[int]               # [R,G,B] 0-255
-    mask_points: np.ndarray = field(default_factory=lambda: np.empty((0, 3)))
-
-    @property
-    def node_id(self) -> str:
-        return f"{self.label}_{self.class_id}_{int(self.position_3d[2]*100)}"
+    label:       str
+    confidence:  float
+    bbox_2d:     List[int]          # [x1, y1, x2, y2] pixels
+    position_3d: List[float]        # [x, y, z] metres in camera frame
+    bbox_min:    List[float]        # 3D bbox min corner
+    bbox_max:    List[float]        # 3D bbox max corner
+    mask:        Optional[np.ndarray] = field(default=None, repr=False)
+    color:       List[int] = field(default_factory=lambda: [100, 200, 255])
+    clip_label:  str = ''
+    clip_score:  float = 0.0
 
 
-# ── Detector ──────────────────────────────────────────────────────────────────
+# ── Colour palette ────────────────────────────────────────────────────────────
+_PALETTE = [
+    [255,  80,  80], [ 80, 255,  80], [ 80,  80, 255],
+    [255, 255,  80], [255,  80, 255], [ 80, 255, 255],
+    [255, 160,  80], [160, 255,  80], [ 80, 160, 255],
+    [200, 100, 200], [100, 200, 100], [200, 200, 100],
+]
 
+
+# ── Main detector class ───────────────────────────────────────────────────────
 class ObjectDetector3D:
     """
-    Wraps YOLOv8 and fuses detections with aligned depth from RealSense L515.
+    Parameters
+    ----------
+    text_prompt : str
+        Comma-separated object names, e.g.
+        "person, cup, laptop, chair, bottle"
+    gdino_box_threshold   : float  (default 0.35)
+    gdino_text_threshold  : float  (default 0.25)
+    clip_verify           : bool   (default True)  run CLIP re-scoring
+    clip_threshold        : float  (default 0.20)  min CLIP score to keep
     """
 
-    # Per-class colour palette for graph nodes
-    CLASS_COLORS = {
-        "person":       (255, 80,  80),
-        "chair":        (80,  200, 80),
-        "laptop":       (80,  80,  255),
-        "cup":          (255, 200, 80),
-        "bottle":       (200, 80,  255),
-        "book":         (80,  200, 255),
-        "keyboard":     (255, 160, 80),
-        "mouse":        (160, 255, 80),
-        "monitor":      (80,  160, 255),
-        "desk":         (200, 200, 80),
-        "phone":        (255, 80,  200),
-    }
-    DEFAULT_COLOR = (160, 160, 160)
+    GDINO_CFG     = "/weights/GroundingDINO_SwinT_OGC.py"
+    GDINO_WEIGHTS = "/weights/groundingdino_swint_ogc.pth"
+    SAM2_CFG      = "configs/sam2.1/sam2.1_hiera_l"
+    SAM2_WEIGHTS  = "/weights/sam2.1_hiera_large.pt"
+    CLIP_MODEL    = "ViT-B-32"
+    CLIP_PRETRAIN = "openai"
 
     def __init__(
         self,
-        model_path: str = "yolov8m.pt",
-        confidence_threshold: float = 0.45,
-        depth_sample_stride: int = 4,
-        depth_min_m: float = 0.1,
-        depth_max_m: float = 6.0,
+        text_prompt:          str   = "person, cup, bottle, laptop, chair, table",
+        gdino_box_threshold:  float = 0.35,
+        gdino_text_threshold: float = 0.25,
+        clip_verify:          bool  = True,
+        clip_threshold:       float = 0.20,
     ):
-        self.conf_thresh = confidence_threshold
-        self.depth_stride = depth_sample_stride
-        self.depth_min = depth_min_m
-        self.depth_max = depth_max_m
+        self.text_prompt          = text_prompt
+        self.gdino_box_threshold  = gdino_box_threshold
+        self.gdino_text_threshold = gdino_text_threshold
+        self.clip_verify          = clip_verify
+        self.clip_threshold       = clip_threshold
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"[ObjectDetector3D] Loading YOLOv8 on {self.device} ...")
-        self.model = YOLO(model_path)
-        self.model.to(self.device)
-        print(f"[ObjectDetector3D] Ready. {len(self.model.names)} classes.")
+        print(f"[ObjectDetector3D] Device: {self.device}")
 
-    # ── Public API ────────────────────────────────────────────────────────────
+        self._load_gdino()
+        self._load_sam2()
+        if clip_verify:
+            self._load_clip()
+
+        # Build CLIP text embeddings once
+        self._clip_labels   = [l.strip() for l in text_prompt.split(",") if l.strip()]
+        self._clip_text_emb = None
+        if clip_verify:
+            self._encode_clip_labels()
+
+        print(f"[ObjectDetector3D] Ready. Prompt: '{text_prompt}'")
+
+    # ── Model loaders ─────────────────────────────────────────────────────────
+
+    def _load_gdino(self):
+        print("[ObjectDetector3D] Loading GroundingDINO …")
+        self.gdino = gdino_load_model(
+            self.GDINO_CFG, self.GDINO_WEIGHTS, device=self.device
+        )
+        self._gdino_transform = T.Compose([
+            T.ToPILImage(),
+            T.Resize(800),
+            T.ToTensor(),
+            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ])
+        self.gdino.eval()
+        print("[ObjectDetector3D] GroundingDINO ready.")
+
+    def _load_sam2(self):
+        print("[ObjectDetector3D] Loading SAM2 …")
+        sam2_model = build_sam2(
+            self.SAM2_CFG, self.SAM2_WEIGHTS,
+            device=self.device,
+            apply_postprocessing=False,
+        )
+        self.sam2 = SAM2ImagePredictor(sam2_model)
+        print("[ObjectDetector3D] SAM2 ready.")
+
+    def _load_clip(self):
+        print("[ObjectDetector3D] Loading CLIP …")
+        self.clip_model, _, self.clip_preprocess = open_clip.create_model_and_transforms(
+            self.CLIP_MODEL, pretrained=self.CLIP_PRETRAIN
+        )
+        self.clip_model = self.clip_model.to(self.device).eval()
+        self.clip_tokenizer = open_clip.get_tokenizer(self.CLIP_MODEL)
+        print("[ObjectDetector3D] CLIP ready.")
+
+    def _encode_clip_labels(self):
+        texts = self.clip_tokenizer(self._clip_labels).to(self.device)
+        with torch.no_grad():
+            self._clip_text_emb = self.clip_model.encode_text(texts)
+            self._clip_text_emb /= self._clip_text_emb.norm(dim=-1, keepdim=True)
+
+    # ── Update prompt at runtime ───────────────────────────────────────────────
+
+    def update_prompt(self, new_prompt: str):
+        self.text_prompt  = new_prompt
+        self._clip_labels = [l.strip() for l in new_prompt.split(",") if l.strip()]
+        if self.clip_verify:
+            self._encode_clip_labels()
+        print(f"[ObjectDetector3D] Prompt updated: '{new_prompt}'")
+
+    # ── Main detect method ────────────────────────────────────────────────────
 
     def detect(
         self,
-        rgb_image: np.ndarray,         # H×W×3  uint8
-        depth_image: np.ndarray,       # H×W    float32 [metres]
-        intrinsics: dict,              # {fx, fy, cx, cy}
+        rgb:        np.ndarray,   # H×W×3 uint8 RGB
+        depth:      np.ndarray,   # H×W float32 metres
+        intrinsics: dict,
     ) -> List[Detection3D]:
-        """Run detection + 3-D fusion. Returns list of Detection3D."""
 
-        h, w = rgb_image.shape[:2]
-        results = self.model(
-            rgb_image,
-            conf=self.conf_thresh,
-            verbose=False,
-            device=self.device,
+        h, w = rgb.shape[:2]
+
+        # ── 1. GroundingDINO: open-vocab detection ────────────────────────────
+        img_tensor = self._gdino_transform(rgb).to(self.device)
+
+        with torch.no_grad():
+            boxes, logits, phrases = gdino_predict(
+                model=self.gdino,
+                image=img_tensor,
+                caption=self.text_prompt,
+                box_threshold=self.gdino_box_threshold,
+                text_threshold=self.gdino_text_threshold,
+                device=self.device,
+            )
+
+        if len(boxes) == 0:
+            return []
+
+        # Convert normalised cxcywh → pixel xyxy
+        boxes_xyxy = box_ops.box_cxcywh_to_xyxy(boxes) * torch.tensor(
+            [w, h, w, h], dtype=torch.float32
         )
+        boxes_np = boxes_xyxy.cpu().numpy().astype(int)
+        scores   = logits.cpu().numpy()
 
-        detections: List[Detection3D] = []
-        for r in results:
-            for box in r.boxes:
-                det = self._process_box(box, rgb_image, depth_image, intrinsics, h, w)
-                if det is not None:
-                    detections.append(det)
+        # ── 2. SAM2: segment each box ─────────────────────────────────────────
+        self.sam2.set_image(rgb)
+        masks_all = []
+        for box in boxes_np:
+            x1, y1, x2, y2 = box
+            x1 = max(0, x1); y1 = max(0, y1)
+            x2 = min(w-1, x2); y2 = min(h-1, y2)
+            try:
+                m, _, _ = self.sam2.predict(
+                    point_coords=None,
+                    point_labels=None,
+                    box=np.array([x1, y1, x2, y2])[None, :],
+                    multimask_output=False,
+                )
+                masks_all.append(m[0].astype(bool))   # H×W bool
+            except Exception:
+                # Fallback: rectangular mask
+                fallback = np.zeros((h, w), dtype=bool)
+                fallback[y1:y2, x1:x2] = True
+                masks_all.append(fallback)
 
-        # Non-maximum suppression in 3-D (remove duplicate objects)
-        detections = self._nms_3d(detections, iou_thresh_3d=0.5)
+        # ── 3. CLIP: verify / re-classify ─────────────────────────────────────
+        clip_labels = phrases
+        clip_scores = scores.tolist()
+
+        if self.clip_verify and self._clip_text_emb is not None:
+            clip_labels, clip_scores = self._clip_reclassify(
+                rgb, boxes_np, phrases, scores
+            )
+
+        # ── 4. 3D fusion ──────────────────────────────────────────────────────
+        detections = []
+        for i, (box, mask, label, score) in enumerate(
+            zip(boxes_np, masks_all, clip_labels, clip_scores)
+        ):
+            if score < self.clip_threshold and self.clip_verify:
+                continue
+
+            pos3d, bmin, bmax = self._unproject_mask(mask, depth, intrinsics)
+            if pos3d is None:
+                continue
+
+            color = _PALETTE[i % len(_PALETTE)]
+            x1, y1, x2, y2 = box
+
+            detections.append(Detection3D(
+                label=label,
+                confidence=float(score),
+                bbox_2d=[int(x1), int(y1), int(x2), int(y2)],
+                position_3d=pos3d,
+                bbox_min=bmin,
+                bbox_max=bmax,
+                mask=mask,
+                color=color,
+                clip_label=label,
+                clip_score=float(score),
+            ))
+
         return detections
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+    # ── CLIP re-classification ────────────────────────────────────────────────
 
-    def _process_box(self, box, rgb, depth, intr, H, W) -> Optional[Detection3D]:
-        x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(W - 1, x2), min(H - 1, y2)
+    def _clip_reclassify(self, rgb, boxes_np, phrases, scores):
+        out_labels = list(phrases)
+        out_scores = list(scores)
 
-        if x2 <= x1 or y2 <= y1:
-            return None
+        crops = []
+        for box in boxes_np:
+            x1, y1, x2, y2 = box
+            x1 = max(0, x1); y1 = max(0, y1)
+            crop = rgb[y1:y2, x1:x2]
+            if crop.size == 0:
+                crops.append(None)
+                continue
+            pil = self.clip_preprocess(
+                __import__('PIL').Image.fromarray(crop)
+            ).unsqueeze(0).to(self.device)
+            crops.append(pil)
 
-        conf  = float(box.conf[0])
-        cls   = int(box.cls[0])
-        label = self.model.names[cls]
+        for i, pil in enumerate(crops):
+            if pil is None:
+                continue
+            try:
+                with torch.no_grad():
+                    img_emb = self.clip_model.encode_image(pil)
+                    img_emb /= img_emb.norm(dim=-1, keepdim=True)
+                    sims = (img_emb @ self._clip_text_emb.T).squeeze(0)
+                    best_idx  = sims.argmax().item()
+                    best_score = sims[best_idx].item()
+                out_labels[i] = self._clip_labels[best_idx]
+                out_scores[i] = best_score
+            except Exception:
+                pass
 
-        roi_depth = depth[y1:y2, x1:x2]
-        valid_mask = (roi_depth > self.depth_min) & (roi_depth < self.depth_max)
-        valid_depths = roi_depth[valid_mask]
+        return out_labels, out_scores
 
-        if len(valid_depths) < 10:
-            return None
+    # ── 3D unprojection ───────────────────────────────────────────────────────
 
-        # Robust depth estimate – lower 30th percentile (closest surface)
-        z = float(np.percentile(valid_depths, 30))
+    def _unproject_mask(self, mask, depth, intrinsics):
+        fx = intrinsics['fx']; fy = intrinsics['fy']
+        cx = intrinsics['cx']; cy = intrinsics['cy']
 
-        fx, fy = intr['fx'], intr['fy']
-        cx, cy = intr['cx'], intr['cy']
+        ys, xs = np.where(mask)
+        if len(xs) == 0:
+            return None, None, None
 
-        cx_2d = (x1 + x2) / 2.0
-        cy_2d = (y1 + y2) / 2.0
-        x3d = (cx_2d - cx) * z / fx
-        y3d = (cy_2d - cy) * z / fy
+        d = depth[ys, xs]
+        valid = (d > 0.1) & (d < 8.0)
+        if valid.sum() < 5:
+            return None, None, None
 
-        # Build per-ROI 3-D point cloud (sampled)
-        pts_3d = self._roi_to_3d(roi_depth, x1, y1, intr, valid_mask)
+        d  = d[valid]
+        xs = xs[valid]; ys = ys[valid]
 
-        # 3-D bounding box
-        if len(pts_3d):
-            bb_min = pts_3d.min(axis=0).tolist()
-            bb_max = pts_3d.max(axis=0).tolist()
-        else:
-            bb_min = [x3d - 0.1, y3d - 0.1, z - 0.05]
-            bb_max = [x3d + 0.1, y3d + 0.1, z + 0.05]
+        X = (xs - cx) * d / fx
+        Y = (ys - cy) * d / fy
+        Z = d
 
-        # Mean colour inside bbox
-        roi_rgb = rgb[y1:y2, x1:x2]
-        color = tuple(int(c) for c in roi_rgb.mean(axis=(0, 1)))
+        # Median centroid (robust to noise)
+        pos3d = [float(np.median(X)), float(np.median(Y)), float(np.median(Z))]
+        bmin  = [float(X.min()), float(Y.min()), float(Z.min())]
+        bmax  = [float(X.max()), float(Y.max()), float(Z.max())]
 
-        # Override with class colour if available
-        class_color = self.CLASS_COLORS.get(label, self.DEFAULT_COLOR)
-
-        return Detection3D(
-            label=label,
-            confidence=conf,
-            class_id=cls,
-            bbox_2d=[x1, y1, x2, y2],
-            position_3d=[round(x3d, 4), round(y3d, 4), round(z, 4)],
-            bbox_3d_min=bb_min,
-            bbox_3d_max=bb_max,
-            color=list(class_color),
-            mask_points=pts_3d,
-        )
-
-    def _roi_to_3d(
-        self,
-        roi_depth: np.ndarray,
-        x_off: int,
-        y_off: int,
-        intr: dict,
-        valid_mask: np.ndarray,
-    ) -> np.ndarray:
-        fx, fy = intr['fx'], intr['fy']
-        cx, cy = intr['cx'], intr['cy']
-        s = self.depth_stride
-
-        # Vectorised projection (fast)
-        h, w = roi_depth.shape
-        v_idx, u_idx = np.mgrid[0:h:s, 0:w:s]
-        z_vals = roi_depth[v_idx, u_idx]
-        mask   = valid_mask[v_idx, u_idx]
-
-        v_idx, u_idx, z_vals = v_idx[mask], u_idx[mask], z_vals[mask]
-        if len(z_vals) == 0:
-            return np.empty((0, 3), dtype=np.float32)
-
-        x_vals = (u_idx + x_off - cx) * z_vals / fx
-        y_vals = (v_idx + y_off - cy) * z_vals / fy
-        return np.stack([x_vals, y_vals, z_vals], axis=1).astype(np.float32)
-
-    @staticmethod
-    def _nms_3d(dets: List[Detection3D], iou_thresh_3d: float) -> List[Detection3D]:
-        """Remove detections whose 3-D centroids are too close (same object)."""
-        if len(dets) <= 1:
-            return dets
-        kept = []
-        for d in sorted(dets, key=lambda x: -x.confidence):
-            pos = np.array(d.position_3d)
-            duplicate = False
-            for k in kept:
-                if k.label == d.label:
-                    dist = np.linalg.norm(pos - np.array(k.position_3d))
-                    if dist < 0.25:  # 25 cm – same object
-                        duplicate = True
-                        break
-            if not duplicate:
-                kept.append(d)
-        return kept
+        return pos3d, bmin, bmax
