@@ -3,1041 +3,463 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>3D Scene Graph · RealSense L515</title>
+<title>Scene Graph — Live View</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Rajdhani:wght@300;400;600;700&display=swap');
-
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  :root {
-    --bg:       #04070f;
-    --panel:    rgba(6, 14, 30, 0.92);
-    --border:   rgba(64, 196, 255, 0.18);
-    --accent:   #40c4ff;
-    --accent2:  #64ffda;
-    --accent3:  #ea80fc;
-    --text:     #c8e6f8;
-    --dim:      #4a7090;
-    --warn:     #ff6d00;
-    --font-ui:  'Rajdhani', sans-serif;
-    --font-mono:'Space Mono', monospace;
-  }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font-ui);
-    overflow: hidden;
-    height: 100vh;
-    width: 100vw;
-  }
-
-  /* ── Canvas ────────────────────────────────────────────────────────────── */
-  #canvas-container {
-    position: fixed;
-    inset: 0;
-  }
-
-  
-
-  /* ── HUD overlay ────────────────────────────────────────────────────────── */
-  #hud {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 10;
-  }
-
-  /* ── Top bar ────────────────────────────────────────────────────────────── */
-  #topbar {
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 56px;
-    background: linear-gradient(to bottom, rgba(4,7,15,0.95), transparent);
-    display: flex;
-    align-items: center;
-    padding: 0 24px;
-    gap: 20px;
-    pointer-events: all;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .logo {
-    font-family: var(--font-mono);
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--accent);
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    flex-shrink: 0;
-  }
-  .logo span { color: var(--accent2); }
-
-  .divider { width: 1px; height: 28px; background: var(--border); }
-
-  #status-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--dim);
-    transition: background 0.3s;
-    flex-shrink: 0;
-  }
-  #status-dot.connected { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
-  #status-dot.error     { background: var(--warn); }
-
-  #status-text {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--dim);
-    flex-shrink: 0;
-  }
-
-  .spacer { flex: 1; }
-
-  /* ── Mode switcher ──────────────────────────────────────────────────────── */
-  /* #mode-switch {
-    display: flex;
-    gap: 4px;
-    background: rgba(10, 25, 50, 0.8);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 4px;
-  }
-
-  .mode-btn {
-    padding: 6px 18px;
-    border-radius: 5px;
-    border: none;
-    background: transparent;
-    color: var(--dim);
-    font-family: var(--font-ui);
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    cursor: pointer;
-    transition: all 0.2s;
-    text-transform: uppercase;
-  }
-  .mode-btn:hover { color: var(--text); }
-  .mode-btn.active {
-    background: var(--accent);
-    color: #04070f;
-    box-shadow: 0 0 16px rgba(64, 196, 255, 0.4);
-  }
-  .mode-btn[data-mode="mesh"].active  { background: var(--accent3); box-shadow: 0 0 16px rgba(234,128,252,0.4); }
-  .mode-btn[data-mode="graph"].active { background: var(--accent2); box-shadow: 0 0 16px rgba(100,255,218,0.4); } */
-
-
-  #mode-switch {
-  display: flex;
-  gap: 4px;
-  background: rgba(10, 25, 50, 0.8);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&family=Bebas+Neue&display=swap');
+:root {
+  --bg:#07090d; --panel:#0b0f18; --border:#182030;
+  --accent:#39ff14; --accent2:#ff3c00; --accent3:#00cfff;
+  --dim:#2a3a4a; --text:#b0c8d0; --text-dim:#3a5060;
 }
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'IBM Plex Mono',monospace;
+     height:100vh;display:flex;flex-direction:column;overflow:hidden;}
 
-#mode-switch button {
-  position: relative;
-  padding: 7px 16px;
-  font-size: 11px;
-  font-family: 'Courier New', monospace;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #4dd9ff;
-  background: transparent;        /* ← removes white default */
-  border: 1px solid rgba(77, 217, 255, 0.35);
-  border-radius: 5px;
-  cursor: pointer;
-  outline: none;                   /* ← removes focus ring */
-  -webkit-appearance: none;        /* ← removes OS default styling */
-  appearance: none;                /* ← removes OS default styling */
-  transition: all 0.2s ease;
-  text-shadow: 0 0 8px rgba(77, 217, 255, 0.6);
-  overflow: hidden;
-}
+/* Header */
+header{display:flex;align-items:center;gap:16px;padding:0 16px;height:44px;
+       background:var(--panel);border-bottom:1px solid var(--border);flex-shrink:0;}
+.logo{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:.12em;
+      color:var(--accent);text-shadow:0 0 20px rgba(57,255,20,.4);}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--text-dim);transition:background .3s;}
+.dot.live{background:var(--accent);box-shadow:0 0 8px var(--accent);}
+.dot.err{background:var(--accent2);}
+#ws-url{font-size:10px;background:transparent;border:1px solid var(--border);
+        color:var(--text);padding:3px 8px;font-family:'IBM Plex Mono',monospace;width:210px;}
+.btn{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;
+     padding:4px 14px;border:1px solid var(--accent);background:rgba(57,255,20,.08);
+     color:var(--accent);cursor:pointer;transition:all .2s;}
+.btn:hover{background:rgba(57,255,20,.2);}
+.hstats{display:flex;gap:18px;margin-left:auto;font-size:10px;color:var(--text-dim);}
+.hstats b{color:var(--accent3);}
 
-#mode-switch button:hover {
-  color: #fff;
-  border-color: rgba(77, 217, 255, 0.9);
-  background: rgba(77, 217, 255, 0.08);
-  box-shadow:
-    0 0 8px  rgba(77, 217, 255, 0.5),
-    0 0 20px rgba(77, 217, 255, 0.25),
-    inset 0 0 8px rgba(77, 217, 255, 0.08);
-  text-shadow: 0 0 6px #fff, 0 0 12px rgba(77, 217, 255, 1);
-}
+/* Main */
+.main{display:flex;flex:1;overflow:hidden;}
+.divider{width:1px;background:var(--border);flex-shrink:0;}
+.panel{display:flex;flex-direction:column;overflow:hidden;flex:1;min-width:0;}
+.phead{display:flex;align-items:center;justify-content:space-between;
+       padding:5px 14px;background:var(--panel);border-bottom:1px solid var(--border);flex-shrink:0;}
+.ptitle{font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:.15em;}
+.pbadge{font-size:9px;padding:2px 7px;border:1px solid var(--border);color:var(--text-dim);}
+.pbadge.live{border-color:var(--accent);color:var(--accent);}
 
-#mode-switch button.active {
-  color: #00f7ff;
-  border-color: #00f7ff;
-  background: rgba(0, 247, 255, 0.12);
-  box-shadow:
-    0 0 10px rgba(0, 247, 255, 0.7),
-    0 0 30px rgba(0, 247, 255, 0.3),
-    inset 0 0 10px rgba(0, 247, 255, 0.1);
-  text-shadow: 0 0 4px #fff, 0 0 10px #00f7ff, 0 0 20px #00f7ff;
-  animation: pulse-glow 2s ease-in-out infinite;
-}
+/* Mode buttons */
+.mode-bar{display:flex;gap:6px;align-items:center;}
+.mBtn{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.08em;
+      padding:3px 10px;border:1px solid var(--border);background:transparent;
+      color:var(--text-dim);cursor:pointer;transition:all .15s;}
+.mBtn:hover{color:var(--text);border-color:var(--dim);}
+.mBtn.active{border-color:var(--accent3);color:var(--accent3);background:rgba(0,207,255,.08);}
+.mBtn[data-mode="graph"].active{border-color:var(--accent);color:var(--accent);background:rgba(57,255,20,.08);}
+.mBtn[data-mode="mesh"].active{border-color:#ea80fc;color:#ea80fc;background:rgba(234,128,252,.08);}
+.mBtn[data-mode="pcd"].active{border-color:var(--accent3);color:var(--accent3);background:rgba(0,207,255,.08);}
 
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 10px rgba(0,247,255,0.7), 0 0 30px rgba(0,247,255,0.3), inset 0 0 10px rgba(0,247,255,0.1); }
-  50%       { box-shadow: 0 0 15px rgba(0,247,255,0.9), 0 0 45px rgba(0,247,255,0.5), inset 0 0 15px rgba(0,247,255,0.15); }
-}
-  /* ── Left panel ─────────────────────────────────────────────────────────── */
-  #left-panel {
-    position: absolute;
-    top: 68px; left: 16px;
-    width: 230px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    pointer-events: all;
-    backdrop-filter: blur(12px);
-  }
+/* RGB panel */
+.rgb-wrap{flex:1;position:relative;background:#000;overflow:hidden;
+          display:flex;align-items:center;justify-content:center;}
+#rgb-img{width:100%;height:100%;object-fit:contain;display:none;}
+.no-feed{text-align:center;color:var(--text-dim);font-size:11px;line-height:2.4;position:absolute;}
+.no-feed .icon{font-size:36px;display:block;margin-bottom:8px;opacity:.25;}
+.rgb-wrap::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:2;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.05) 2px,rgba(0,0,0,.05) 4px);}
+.det-tags{position:absolute;bottom:10px;left:10px;z-index:5;display:flex;flex-direction:column;gap:4px;}
+.det-tag{font-size:10px;padding:3px 8px;background:rgba(7,9,13,.85);border-left:2px solid var(--accent);letter-spacing:.05em;}
+.det-tag b{color:var(--accent);}
 
-  .panel-title {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--accent);
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 8px;
-  }
+/* 3D panel */
+#three-wrap{flex:1;position:relative;overflow:hidden;}
+#three-wrap canvas{display:block;}
+.hint{position:absolute;bottom:8px;left:10px;font-size:9px;color:var(--text-dim);z-index:5;line-height:1.9;pointer-events:none;}
+/* empty state for mesh */
+#mesh-empty{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+            text-align:center;color:var(--text-dim);font-size:11px;line-height:2;display:none;pointer-events:none;}
 
-  .stat-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 13px;
-  }
-  .stat-label { color: var(--dim); font-weight: 400; }
-  .stat-value {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--accent);
-  }
-  .stat-value.warn { color: var(--warn); }
+/* Tooltip */
+#tt{position:absolute;background:rgba(11,15,24,.96);border:1px solid var(--accent3);
+    padding:8px 12px;font-size:10px;pointer-events:none;display:none;z-index:20;min-width:150px;line-height:1.9;}
+#tt .tl{font-family:'Bebas Neue',sans-serif;font-size:16px;color:var(--accent);letter-spacing:.1em;margin-bottom:2px;}
+#tt .tr{color:var(--text-dim);}  #tt .tr b{color:var(--text);}
 
-  /* ── Right panel: node list ─────────────────────────────────────────────── */
-  #right-panel {
-    position: absolute;
-    top: 68px; right: 16px;
-    width: 240px;
-    max-height: calc(100vh - 160px);
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-    pointer-events: all;
-    backdrop-filter: blur(12px);
-    overflow-y: auto;
-  }
-
-  #right-panel::-webkit-scrollbar { width: 4px; }
-  #right-panel::-webkit-scrollbar-track { background: transparent; }
-  #right-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .node-card {
-    padding: 10px 12px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
-    margin-top: 8px;
-    cursor: pointer;
-    transition: all 0.2s;
-    position: relative;
-    overflow: hidden;
-  }
-  .node-card::before {
-    content: '';
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    width: 3px;
-    background: var(--node-color, var(--accent));
-    border-radius: 2px 0 0 2px;
-  }
-  .node-card:hover { border-color: var(--accent); background: rgba(64,196,255,0.05); }
-  .node-card .nc-label {
-    font-size: 14px;
-    font-weight: 700;
-    text-transform: capitalize;
-    letter-spacing: 0.04em;
-  }
-  .node-card .nc-pos {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--dim);
-    margin-top: 3px;
-  }
-  .node-card .nc-conf {
-    position: absolute;
-    right: 12px; top: 50%;
-    transform: translateY(-50%);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--accent2);
-  }
-
-  /* ── Bottom bar ─────────────────────────────────────────────────────────── */
-  #bottombar {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 44px;
-    background: linear-gradient(to top, rgba(4,7,15,0.95), transparent);
-    border-top: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    padding: 0 20px;
-    gap: 24px;
-    pointer-events: all;
-  }
-
-  .kb-hint {
-    font-size: 11px;
-    color: var(--dim);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .key {
-    background: rgba(64,196,255,0.1);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--accent);
-  }
-
-  #ws-url-input {
-    margin-left: auto;
-    background: rgba(10,25,50,0.7);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 12px;
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    width: 220px;
-    outline: none;
-  }
-  #ws-url-input:focus { border-color: var(--accent); }
-
-  #connect-btn {
-    padding: 5px 14px;
-    background: var(--accent);
-    border: none;
-    border-radius: 6px;
-    color: #04070f;
-    font-family: var(--font-ui);
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  #connect-btn:hover { background: var(--accent2); }
-
-  /* ── Edge legend ────────────────────────────────────────────────────────── */
-  #edge-legend {
-    position: absolute;
-    bottom: 56px; left: 16px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px 16px;
-    backdrop-filter: blur(12px);
-    pointer-events: all;
-    display: none;
-  }
-  #edge-legend.visible { display: block; }
-  .legend-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 6px;
-    font-size: 12px;
-    color: var(--dim);
-  }
-  .legend-color {
-    width: 28px; height: 3px;
-    border-radius: 2px;
-    flex-shrink: 0;
-  }
-
-  /* ── Tooltip ─────────────────────────────────────────────────────────────── */
-  #tooltip {
-    position: fixed;
-    background: var(--panel);
-    border: 1px solid var(--accent);
-    border-radius: 8px;
-    padding: 10px 14px;
-    font-size: 13px;
-    pointer-events: none;
-    display: none;
-    backdrop-filter: blur(12px);
-    z-index: 100;
-    max-width: 200px;
-  }
-
-  /* ── Corner glow decorations ─────────────────────────────────────────────── */
-  .corner-glow {
-    position: fixed;
-    width: 300px; height: 300px;
-    border-radius: 50%;
-    pointer-events: none;
-    z-index: 1;
-  }
-  .corner-glow.tl {
-    top: -120px; left: -120px;
-    background: radial-gradient(circle, rgba(64,196,255,0.06) 0%, transparent 70%);
-  }
-  .corner-glow.br {
-    bottom: -120px; right: -120px;
-    background: radial-gradient(circle, rgba(100,255,218,0.05) 0%, transparent 70%);
-  }
-
-  /* ── Scan-line effect ───────────────────────────────────────────────────── */
-  #scanlines {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 5;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 3px,
-      rgba(0,0,0,0.04) 3px,
-      rgba(0,0,0,0.04) 4px
-    );
-  }
+/* Bottom */
+.bot{display:flex;align-items:center;gap:14px;padding:0 14px;height:30px;
+     background:var(--panel);border-top:1px solid var(--border);
+     flex-shrink:0;font-size:9px;color:var(--text-dim);letter-spacing:.08em;}
+.bot b{color:var(--accent3);}
+.fps-bar{margin-left:auto;display:flex;gap:3px;align-items:flex-end;}
+.fd{width:4px;background:var(--dim);border-radius:1px;}
 </style>
 </head>
 <body>
 
-<!-- Three.js CDN -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<header>
+  <div class="logo">SCENE·GRAPH</div>
+  <div class="dot" id="dot"></div>
+  <span id="ws-label" style="font-size:10px;letter-spacing:.1em">DISCONNECTED</span>
+  <input id="ws-url" value="ws://localhost:8765">
+  <button class="btn" id="btn-connect">CONNECT</button>
+  <div class="hstats">
+    <span>FRAME <b id="h-frame">—</b></span>
+    <span>DETS <b id="h-dets">—</b></span>
+    <span>NODES <b id="h-nodes">—</b></span>
+    <span>EDGES <b id="h-edges">—</b></span>
+    <span>MS <b id="h-ms">—</b></span>
+  </div>
+</header>
 
-<!-- Scanlines + glow -->
-<div id="scanlines"></div>
-<div class="corner-glow tl"></div>
-<div class="corner-glow br"></div>
-
-<!-- 3D Canvas -->
-<div id="canvas-container"></div>
-<canvas id="three-canvas"></canvas>
-<div id="cam-view" style="
-    position:absolute;
-    top:0; left:0; width:100%; height:100%;
-    background:#000;
-    display:none;
-    align-items:center;
-    justify-content:center;
-">
-    <img id="cam-img" style="max-width:100%; max-height:100%; object-fit:contain;" />
-</div>
-    <img id="cam-img" style="max-width:100%; max-height:100%; object-fit:contain;" />
-</div>
-<!-- HUD -->
-<div id="hud">
-  <!-- Top bar -->
-  <div id="topbar">
-    <div class="logo">3D<span>SG</span> · RealSense L515</div>
-    <div class="divider"></div>
-    <div id="status-dot"></div>
-    <div id="status-text">Disconnected</div>
-    <div class="spacer"></div>
-    <div id="mode-switch">
-      <button id="btn-rgb"   onclick="setMode(MODES.RGB)">1 · Point Cloud</button>
-      <button id="btn-mesh"  onclick="setMode(MODES.MESH)">2 · Mesh</button>
-      <button id="btn-graph" onclick="setMode(MODES.GRAPH)">3 · Graph</button>
-      <button id="btn-cam"   onclick="setMode(MODES.CAM)">4 · Camera</button>
+<div class="main">
+  <!-- Left: RGB always visible -->
+  <div class="panel">
+    <div class="phead">
+      <span class="ptitle">RGB CAMERA</span>
+      <span class="pbadge" id="rgb-badge">WAITING</span>
+    </div>
+    <div class="rgb-wrap">
+      <img id="rgb-img" alt="camera">
+      <div class="no-feed" id="no-feed">
+        <span class="icon">📷</span>
+        Waiting for camera feed...<br>Click CONNECT
+      </div>
+      <div class="det-tags" id="det-tags"></div>
     </div>
   </div>
 
-  <!-- Left panel: stats -->
-  <div id="left-panel">
-    <div class="panel-title">System Stats</div>
-    <div class="stat-row"><span class="stat-label">Frame</span>     <span class="stat-value" id="s-frame">—</span></div>
-    <div class="stat-row"><span class="stat-label">Detections</span><span class="stat-value" id="s-dets">—</span></div>
-    <div class="stat-row"><span class="stat-label">Graph Nodes</span><span class="stat-value" id="s-nodes">—</span></div>
-    <div class="stat-row"><span class="stat-label">Graph Edges</span><span class="stat-value" id="s-edges">—</span></div>
-    <div class="stat-row"><span class="stat-label">Process</span>   <span class="stat-value" id="s-ms">—</span></div>
-    <div class="stat-row"><span class="stat-label">Points</span>    <span class="stat-value" id="s-pts">—</span></div>
-    <div class="panel-title" style="margin-top:4px">Camera</div>
-    <div class="stat-row"><span class="stat-label">Model</span>     <span class="stat-value">L515 LiDAR</span></div>
-    <div class="stat-row"><span class="stat-label">Mode</span>      <span class="stat-value">Fixed Position</span></div>
-  </div>
+  <div class="divider"></div>
 
-  <!-- Right panel: node list -->
-  <div id="right-panel">
-    <div class="panel-title">Scene Nodes</div>
-    <div id="node-list"></div>
-  </div>
-
-  <!-- Edge legend -->
-  <div id="edge-legend">
-    <div class="panel-title" style="border:none;padding:0">Relations</div>
-    <div class="legend-row"><div class="legend-color" style="background:#64ffda"></div> near</div>
-    <div class="legend-row"><div class="legend-color" style="background:#ff6d00"></div> above / below</div>
-    <div class="legend-row"><div class="legend-color" style="background:#40c4ff"></div> left / right</div>
-    <div class="legend-row"><div class="legend-color" style="background:#ea80fc"></div> in front / behind</div>
-    <div class="legend-row"><div class="legend-color" style="background:#ffff00"></div> on top of</div>
-  </div>
-
-  <!-- Bottom bar -->
-  <div id="bottombar">
-    <div class="kb-hint"><span class="key">R</span> rotate</div>
-    <div class="kb-hint"><span class="key">scroll</span> zoom</div>
-    <div class="kb-hint"><span class="key">1/2/3</span> modes</div>
-    <div class="kb-hint"><span class="key">L</span> legend</div>
-    <!-- <input id="ws-url-input" type="text" value="ws://localhost:8766" placeholder="ws://host:8765"> -->
-     <input id="ws-url-input" type="text" id="ws-url-input" placeholder="ws://host:8766">
-<script>
-  // Auto-fill with current host IP so remote users get correct address
-  document.getElementById('ws-url-input').value = 
-    'ws://' + window.location.hostname + ':8766';
-</script>
-    <button id="connect-btn">Connect</button>
+  <!-- Right: switchable 3D view -->
+  <div class="panel">
+    <div class="phead">
+      <span class="ptitle" id="right-title">SCENE GRAPH</span>
+      <div class="mode-bar">
+        <button class="mBtn active" data-mode="graph">3·GRAPH</button>
+        <button class="mBtn" data-mode="pcd">1·POINT CLOUD</button>
+        <button class="mBtn" data-mode="mesh">2·MESH</button>
+      </div>
+    </div>
+    <div id="three-wrap">
+      <div id="mesh-empty">⬡ Mesh disabled<br><span style="font-size:10px">Open3D is off — enable to use mesh mode</span></div>
+      <div id="tt">
+        <div class="tl" id="tt-label"></div>
+        <div class="tr">pos: <b id="tt-pos"></b></div>
+        <div class="tr">conf: <b id="tt-conf"></b></div>
+        <div class="tr">seen: <b id="tt-count"></b>×</div>
+        <div class="tr">first: <b id="tt-first"></b></div>
+      </div>
+      <div class="hint" id="hint">ORBIT: drag &nbsp;·&nbsp; ZOOM: scroll &nbsp;·&nbsp; PAN: right-drag &nbsp;·&nbsp; KEYS: 1 2 3</div>
+    </div>
   </div>
 </div>
 
-<!-- Tooltip -->
-<div id="tooltip"></div>
+<div class="bot">
+  <span>CANDIDATES <b id="b-cand">—</b></span>
+  <span>|</span><span>EVENTS <b id="b-events">—</b></span>
+  <span>|</span><span>MAP NODES <b id="b-map">—</b></span>
+  <span>|</span><span>PTS <b id="b-pts">—</b></span>
+  <div class="fps-bar" id="fps-bar"></div>
+</div>
 
 <script>
-// ═══════════════════════════════════════════════════════════════════════════════
-// 3D Scene Graph Visualiser · Three.js
-// Three render modes: RGB (point cloud), MESH, GRAPH
-// ═══════════════════════════════════════════════════════════════════════════════
+// ── Three.js ──────────────────────────────────────────────────────────────────
+const wrap = document.getElementById('three-wrap');
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setClearColor(0x07090d,1);
+wrap.appendChild(renderer.domElement);
 
-const MODES = { RGB: 'rgb', MESH: 'mesh', GRAPH: 'graph', CAM: 'cam' };
-let currentMode = MODES.RGB;
-let ws = null;
-let animFrame = null;
-let rotating = false;
-let sceneData = null;
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55,1,0.001,200);
 
-// ── Three.js Setup ────────────────────────────────────────────────────────────
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setClearColor(0x04070f, 1);
-renderer.shadowMap.enabled = true;
-document.getElementById('canvas-container').appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff,0.6));
+const dl=new THREE.DirectionalLight(0x39ff14,1.0); dl.position.set(1,-2,3); scene.add(dl);
+const dl2=new THREE.DirectionalLight(0xffffff,0.4); dl2.position.set(-1,2,-2); scene.add(dl2);
 
-const scene   = new THREE.Scene();
-const camera  = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.01, 100);
-camera.position.set(0, -0.3, -2.5);
-camera.lookAt(0, 0, 1.5);
+const grid=new THREE.GridHelper(10,20,0x182030,0x0d1520); scene.add(grid);
+const lm=c=>new THREE.LineBasicMaterial({color:c});
+const ml=(p1,p2,m)=>new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...p1),new THREE.Vector3(...p2)]),m);
+scene.add(ml([0,0,0],[0.3,0,0],lm(0xff3c00)),ml([0,0,0],[0,0.3,0],lm(0x39ff14)),ml([0,0,0],[0,0,0.3],lm(0x00cfff)));
 
-// Grid helper
-const grid = new THREE.GridHelper(6, 24, 0x0a2030, 0x061220);
-grid.position.y = 0.5;
-scene.add(grid);
+const nG=new THREE.Group(),eG=new THREE.Group(),lG=new THREE.Group();
+const pcdG=new THREE.Group(), meshG=new THREE.Group();
+scene.add(nG,eG,lG,pcdG,meshG);
 
-// Ambient + directional light
-const ambLight = new THREE.AmbientLight(0x203040, 2.0);
-scene.add(ambLight);
-const dirLight = new THREE.DirectionalLight(0x40c4ff, 1.5);
-dirLight.position.set(2, -3, 4);
-scene.add(dirLight);
-const dirLight2 = new THREE.DirectionalLight(0x64ffda, 0.8);
-dirLight2.position.set(-2, -1, -2);
-scene.add(dirLight2);
+// ── Orbit ─────────────────────────────────────────────────────────────────────
+let drag=false,rDrag=false,prev={x:0,y:0};
+let sph={theta:.3,phi:1.1,r:5}, pan=new THREE.Vector3(), tgt=new THREE.Vector3(0,0,0);
 
-// Axis helper (small)
-const axisHelper = new THREE.AxesHelper(0.3);
-axisHelper.position.set(-1.5, 0.5, 0);
-scene.add(axisHelper);
-
-// ── Layer groups ──────────────────────────────────────────────────────────────
-const rgbGroup   = new THREE.Group();
-const meshGroup  = new THREE.Group();
-const graphGroup = new THREE.Group();
-scene.add(rgbGroup, meshGroup, graphGroup);
-
-// ── OrbitControls (minimal inline) ───────────────────────────────────────────
-let isDragging = false, prevMouse = { x: 0, y: 0 };
-let spherical = { theta: 0, phi: Math.PI / 3, radius: 2.5 };
-let target = new THREE.Vector3(0, 0, 1.5);
-
-function updateCamera() {
-  const x = target.x + spherical.radius * Math.sin(spherical.phi) * Math.sin(spherical.theta);
-  const y = target.y - spherical.radius * Math.cos(spherical.phi);
-  const z = target.z + spherical.radius * Math.sin(spherical.phi) * Math.cos(spherical.theta);
-  camera.position.set(x, y, z);
-  camera.lookAt(target);
+function updCam(){
+  const x=sph.r*Math.sin(sph.phi)*Math.sin(sph.theta);
+  const y=sph.r*Math.cos(sph.phi);
+  const z=sph.r*Math.sin(sph.phi)*Math.cos(sph.theta);
+  camera.position.set(tgt.x+x+pan.x,tgt.y+y+pan.y,tgt.z+z+pan.z);
+  camera.lookAt(new THREE.Vector3(tgt.x+pan.x,tgt.y+pan.y,tgt.z+pan.z));
 }
-updateCamera();
+updCam();
 
-renderer.domElement.addEventListener('mousedown', e => { isDragging = true; prevMouse = { x: e.clientX, y: e.clientY }; });
-window.addEventListener('mouseup', () => isDragging = false);
-window.addEventListener('mousemove', e => {
-  if (!isDragging) return;
-  const dx = (e.clientX - prevMouse.x) * 0.006;
-  const dy = (e.clientY - prevMouse.y) * 0.006;
-  spherical.theta -= dx;
-  spherical.phi    = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi + dy));
-  prevMouse = { x: e.clientX, y: e.clientY };
-  updateCamera();
+renderer.domElement.addEventListener('mousedown',e=>{drag=true;rDrag=e.button===2;prev={x:e.clientX,y:e.clientY};});
+window.addEventListener('mouseup',()=>drag=false);
+window.addEventListener('mousemove',e=>{
+  if(!drag)return;
+  const dx=e.clientX-prev.x,dy=e.clientY-prev.y;
+  prev={x:e.clientX,y:e.clientY};
+  if(rDrag){pan.x-=dx*.005;pan.y+=dy*.005;}
+  else{sph.theta-=dx*.008;sph.phi=Math.max(.05,Math.min(Math.PI-.05,sph.phi+dy*.008));}
+  updCam();
 });
-renderer.domElement.addEventListener('wheel', e => {
-  spherical.radius = Math.max(0.5, Math.min(10, spherical.radius + e.deltaY * 0.003));
-  updateCamera();
-});
+renderer.domElement.addEventListener('wheel',e=>{sph.r=Math.max(.1,Math.min(50,sph.r+e.deltaY*.01));updCam();});
+renderer.domElement.addEventListener('contextmenu',e=>e.preventDefault());
 
-// ── Keyboard shortcuts ────────────────────────────────────────────────────────
-window.addEventListener('keydown', e => {
-  if (e.key === '1') setMode(MODES.RGB);
-  if (e.key === '2') setMode(MODES.MESH);
-  if (e.key === '3') setMode(MODES.GRAPH);
-  if (e.key === 'r' || e.key === 'R') rotating = !rotating;
-  if (e.key === 'l' || e.key === 'L') {
-    const leg = document.getElementById('edge-legend');
-    leg.classList.toggle('visible');
-  }
-});
+function resizeThree(){
+  const w=wrap.clientWidth,h=wrap.clientHeight;
+  renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize',resizeThree); resizeThree();
+
+let tick=0;
+(function animate(){requestAnimationFrame(animate);tick+=.016;
+  nG.children.forEach((m,i)=>{if(m.userData.pulse)m.scale.setScalar(m.userData.bs*(1+Math.sin(tick*2+i)*.06));});
+  renderer.render(scene,camera);})();
 
 // ── Mode switching ────────────────────────────────────────────────────────────
+const MODES = {graph:'graph', pcd:'pcd', mesh:'mesh'};
+let currentMode = MODES.graph;
+const titles = {graph:'SCENE GRAPH', pcd:'POINT CLOUD', mesh:'MESH'};
+
 function setMode(mode) {
   currentMode = mode;
-  const threeCanvas = document.getElementById('three-canvas');
-  const camView = document.getElementById('cam-view');
-
-  if (mode === MODES.CAM) {
-    threeCanvas.style.display = 'none';
-    camView.style.display = 'flex';
-  } else {
-    threeCanvas.style.display = 'block';
-    camView.style.display = 'none';
-  }
-
-  document.querySelectorAll('.mode-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.mode === mode);
-  });
-
-  rgbGroup.visible   = mode === MODES.RGB;
-  meshGroup.visible  = mode === MODES.MESH;
-  graphGroup.visible = mode === MODES.GRAPH;
-  // cam-view handled by display above, no Three.js group needed
-
-  const leg = document.getElementById('edge-legend');
-  leg.classList.toggle('visible', mode === MODES.GRAPH);
-
-  if (sceneData) renderScene(sceneData);
+  nG.visible=eG.visible=lG.visible = mode===MODES.graph;
+  pcdG.visible = mode===MODES.pcd;
+  meshG.visible = mode===MODES.mesh;
+  document.getElementById('right-title').textContent = titles[mode];
+  document.getElementById('mesh-empty').style.display = 'none';
+  document.querySelectorAll('.mBtn').forEach(b=>b.classList.toggle('active', b.dataset.mode===mode));
+  if (mode===MODES.mesh && meshG.children.length===0)
+    document.getElementById('mesh-empty').style.display='block';
 }
 
-document.querySelectorAll('.mode-btn').forEach(b => {
-  b.addEventListener('click', () => setMode(b.dataset.mode));
+document.querySelectorAll('.mBtn').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
+window.addEventListener('keydown',e=>{
+  if(e.key==='1') setMode(MODES.pcd);
+  if(e.key==='2') setMode(MODES.mesh);
+  if(e.key==='3') setMode(MODES.graph);
 });
 
-// ── Colour helpers ────────────────────────────────────────────────────────────
-function hexToVec3(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  return new THREE.Color((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255);
-}
-function arrToColor(arr) {
-  return new THREE.Color(arr[0] / 255, arr[1] / 255, arr[2] / 255);
-}
-
-// ── Clear groups ──────────────────────────────────────────────────────────────
-function clearGroup(g) {
-  while (g.children.length) {
-    const obj = g.children[0];
-    if (obj.geometry) obj.geometry.dispose();
-    if (obj.material) {
-      if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
-      else obj.material.dispose();
-    }
-    g.remove(obj);
+// ── Clear group ───────────────────────────────────────────────────────────────
+function clearG(g){
+  while(g.children.length){
+    const o=g.children[0];
+    if(o.geometry)o.geometry.dispose();
+    if(o.material){if(Array.isArray(o.material))o.material.forEach(m=>m.dispose());else o.material.dispose();}
+    g.remove(o);
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RGB MODE: Coloured point cloud
-// ─────────────────────────────────────────────────────────────────────────────
-function renderRGB(pcd) {
-  clearGroup(rgbGroup);
-  if (!pcd || !pcd.points || pcd.count === 0) return;
-
-  const n       = pcd.count;
-  const pts     = new Float32Array(pcd.points);
-  const clrData = new Float32Array(pcd.colors.length);
-  for (let i = 0; i < pcd.colors.length; i++) clrData[i] = pcd.colors[i] / 255;
-
+// ── Point cloud renderer ──────────────────────────────────────────────────────
+function renderPCD(pcd) {
+  clearG(pcdG);
+  if(!pcd||!pcd.points||pcd.count===0) return;
+  const n   = pcd.count;
+  const pts = new Float32Array(pcd.points);
+  const clr = new Float32Array(pcd.colors.length);
+  for(let i=0;i<pcd.colors.length;i++) clr[i]=pcd.colors[i]/255;
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pts,     3));
-  geo.setAttribute('color',    new THREE.BufferAttribute(clrData, 3));
-
-  const mat = new THREE.PointsMaterial({
-    vertexColors: true,
-    size:         0.004,
-    sizeAttenuation: true,
-  });
-
-  const points = new THREE.Points(geo, mat);
-  // Transform: camera optical frame → Three.js world
-  // RealSense: +X right, +Y down, +Z forward → Three.js: +X right, +Y up, +Z toward viewer
-  points.rotation.x = Math.PI;
-  rgbGroup.add(points);
-
-  document.getElementById('s-pts').textContent = n.toLocaleString();
+  geo.setAttribute('position', new THREE.BufferAttribute(pts,3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(clr,3));
+  const mat = new THREE.PointsMaterial({vertexColors:true, size:0.004, sizeAttenuation:true});
+  const points = new THREE.Points(geo,mat);
+  points.rotation.x = Math.PI; // RealSense → Three.js
+  pcdG.add(points);
+  document.getElementById('b-pts').textContent = n.toLocaleString();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MESH MODE: Surface mesh with PBR-style shading
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Mesh renderer ─────────────────────────────────────────────────────────────
 function renderMesh(meshData) {
-  clearGroup(meshGroup);
-  if (!meshData || !meshData.vertices || meshData.vertex_count === 0) {
-    // Show placeholder text
+  clearG(meshG);
+  document.getElementById('mesh-empty').style.display='none';
+  if(!meshData||!meshData.vertices||meshData.vertex_count===0){
+    if(currentMode===MODES.mesh) document.getElementById('mesh-empty').style.display='block';
     return;
   }
-
   const verts = new Float32Array(meshData.vertices);
-  const norms = meshData.normals.length ? new Float32Array(meshData.normals) : null;
-  const clrs  = meshData.colors.length  ? new Float32Array(meshData.colors.length) : null;
-  if (clrs) for (let i = 0; i < meshData.colors.length; i++) clrs[i] = meshData.colors[i] / 255;
-
+  const norms = meshData.normals?.length ? new Float32Array(meshData.normals) : null;
+  const clrs  = meshData.colors?.length  ? new Float32Array(meshData.colors.length) : null;
+  if(clrs) for(let i=0;i<meshData.colors.length;i++) clrs[i]=meshData.colors[i]/255;
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-  if (norms) geo.setAttribute('normal', new THREE.BufferAttribute(norms, 3));
-  if (clrs)  geo.setAttribute('color',  new THREE.BufferAttribute(clrs,  3));
+  geo.setAttribute('position',new THREE.BufferAttribute(verts,3));
+  if(norms) geo.setAttribute('normal',new THREE.BufferAttribute(norms,3));
+  if(clrs)  geo.setAttribute('color', new THREE.BufferAttribute(clrs,3));
+  if(meshData.triangles?.length) geo.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.triangles),1));
+  if(!norms) geo.computeVertexNormals();
+  const solid=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({
+    vertexColors:!!clrs, color:clrs?undefined:0x8090a8, metalness:.1, roughness:.6, side:THREE.DoubleSide}));
+  solid.rotation.x=Math.PI;
+  meshG.add(solid);
+  const wire=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({color:0x40c4ff,wireframe:true,opacity:.08,transparent:true}));
+  wire.rotation.x=Math.PI;
+  meshG.add(wire);
+}
 
-  if (meshData.triangles && meshData.triangles.length > 0) {
-    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(meshData.triangles), 1));
+// ── Graph renderer ────────────────────────────────────────────────────────────
+const EC={near:0x39ff14,above:0xff3c00,below:0xff3c00,
+          left_of:0x00cfff,right_of:0x00cfff,
+          in_front_of:0xff00ff,behind:0xff00ff,on_top_of:0xffff00,interacting:0xffffff};
+
+function renderGraph(gd) {
+  clearG(nG);clearG(eG);clearG(lG);
+  if(!gd||!gd.nodes) return;
+  const pm={};
+
+  // Auto-fit camera to nodes on first render
+  if(gd.nodes.length>0 && sph.r===5){
+    const positions = gd.nodes.map(n=>n.position);
+    const cx = positions.reduce((s,p)=>s+p[0],0)/positions.length;
+    const cz = positions.reduce((s,p)=>s+p[2],0)/positions.length;
+    tgt.set(cx, 0, -cz+2);
+    const maxZ = Math.max(...positions.map(p=>p[2]));
+    sph.r = Math.max(3, maxZ*1.5);
+    updCam();
   }
-  if (!norms) geo.computeVertexNormals();
 
-  // Solid mesh
-  const solidMat = new THREE.MeshStandardMaterial({
-    vertexColors: !!clrs,
-    color:        clrs ? undefined : 0x8090a8,
-    metalness:    0.1,
-    roughness:    0.6,
-    side:         THREE.DoubleSide,
+  gd.nodes.forEach((node,i)=>{
+    const [rx,ry,rz]=node.position;
+    const x=rx, y=-ry, z=-rz+2;
+    pm[node.id]=new THREE.Vector3(x,y,z);
+    const ia=node.is_agent||false;
+    const col=node.color||[160,160,160];
+    const c=new THREE.Color(col[0]/255,col[1]/255,col[2]/255);
+    const r=ia?.10:.065;
+    // glow
+    const gm=new THREE.Mesh(new THREE.SphereGeometry(r*2.2,10,10),
+      new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:.07,depthWrite:false}));
+    gm.position.set(x,y,z); nG.add(gm);
+    // sphere
+    const mesh=new THREE.Mesh(new THREE.SphereGeometry(r,18,18),
+      new THREE.MeshPhongMaterial({color:c,emissive:c,emissiveIntensity:.5,transparent:true,opacity:.92}));
+    mesh.position.set(x,y,z);
+    mesh.userData={isNode:true,nd:node,bs:1,pulse:true};
+    nG.add(mesh);
+    // agent ring
+    if(ia){const ring=new THREE.Mesh(new THREE.TorusGeometry(r*1.8,.007,8,32),
+      new THREE.MeshBasicMaterial({color:0xff3c00})); ring.position.set(x,y,z); nG.add(ring);}
+    // label
+    const cv=document.createElement('canvas'); cv.width=280; cv.height=52;
+    const ctx=cv.getContext('2d');
+    ctx.fillStyle=ia?'#ff3c00':'#39ff14'; ctx.font='bold 22px monospace'; ctx.textAlign='center';
+    ctx.fillText(node.label+(ia?' ★':''),140,34);
+    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv),transparent:true}));
+    sp.position.set(x,y+r+.14,z); sp.scale.set(.55,.11,1); lG.add(sp);
   });
-  const solid = new THREE.Mesh(geo, solidMat);
-  solid.rotation.x = Math.PI;
-  meshGroup.add(solid);
 
-  // Wireframe overlay
-  const wireMat = new THREE.MeshBasicMaterial({
-    color: 0x40c4ff,
-    wireframe: true,
-    opacity: 0.08,
-    transparent: true,
+  gd.edges.forEach(edge=>{
+    const p1=pm[edge.source],p2=pm[edge.target]; if(!p1||!p2)return;
+    const col=EC[edge.relation]||0x39ff14;
+    eG.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([p1.clone(),p2.clone()]),
+      new THREE.LineBasicMaterial({color:col,transparent:true,opacity:.45})));
+    const mid=p1.clone().lerp(p2,.55),dir=p2.clone().sub(p1).normalize();
+    const cone=new THREE.Mesh(new THREE.ConeGeometry(.02,.06,6),new THREE.MeshBasicMaterial({color:col}));
+    cone.position.copy(mid); cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir);
+    eG.add(cone);
   });
-  const wire = new THREE.Mesh(geo, wireMat);
-  wire.rotation.x = Math.PI;
-  meshGroup.add(wire);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GRAPH MODE: Nodes as glowing spheres, edges as animated lines
-// ─────────────────────────────────────────────────────────────────────────────
-const RELATION_HEX = {
-  near:        '#64ffda', above: '#ff6d00', below: '#ff6d00',
-  left_of:     '#40c4ff', right_of: '#40c4ff',
-  in_front_of: '#ea80fc', behind: '#ea80fc',
-  on_top_of:   '#ffff00',
-};
-
-function renderGraph(graphData) {
-  clearGroup(graphGroup);
-  if (!graphData || !graphData.nodes) return;
-
-  const nodeMap = {};
-
-  // ── Nodes ──────────────────────────────────────────────────────────────────
-  for (const node of graphData.nodes) {
-    const [rx, ry, rz] = node.position;
-    // Camera-to-Three transform (flip Y and Z)
-    const x =  rx;
-    const y = -ry;
-    const z = -rz;
-
-    nodeMap[node.id] = { x, y, z };
-
-    // Outer glow sphere
-    const glowGeo = new THREE.SphereGeometry(0.065, 16, 16);
-    const glowMat = new THREE.MeshBasicMaterial({
-      color: arrToColor(node.color),
-      transparent: true,
-      opacity: 0.18,
-    });
-    const glowMesh = new THREE.Mesh(glowGeo, glowMat);
-    glowMesh.position.set(x, y, z);
-    graphGroup.add(glowMesh);
-
-    // Core sphere
-    const coreGeo = new THREE.SphereGeometry(0.04, 16, 16);
-    const coreMat = new THREE.MeshStandardMaterial({
-      color:     arrToColor(node.color),
-      emissive:  arrToColor(node.color),
-      emissiveIntensity: 0.6,
-      metalness: 0.3,
-      roughness: 0.3,
-    });
-    const coreMesh = new THREE.Mesh(coreGeo, coreMat);
-    coreMesh.position.set(x, y, z);
-    coreMesh.userData = { node };
-    graphGroup.add(coreMesh);
-
-    // Label sprite
-    const sprite = makeLabel(node.label, node.color);
-    sprite.position.set(x, y + 0.10, z);
-    graphGroup.add(sprite);
-
-    // Bounding box wireframe
-    if (node.bbox_min && node.bbox_max) {
-      const bmin = node.bbox_min, bmax = node.bbox_max;
-      const bw = Math.abs(bmax[0] - bmin[0]) || 0.12;
-      const bh = Math.abs(bmax[1] - bmin[1]) || 0.12;
-      const bd = Math.abs(bmax[2] - bmin[2]) || 0.12;
-
-      const bGeo = new THREE.BoxGeometry(bw, bh, bd);
-      const bMat = new THREE.MeshBasicMaterial({
-        color: arrToColor(node.color),
-        wireframe: true,
-        opacity: 0.25,
-        transparent: true,
-      });
-      const bMesh = new THREE.Mesh(bGeo, bMat);
-      bMesh.position.set(x, y, z);
-      graphGroup.add(bMesh);
-    }
-  }
-
-  // ── Edges ──────────────────────────────────────────────────────────────────
-  for (const edge of graphData.edges) {
-    const src = nodeMap[edge.source];
-    const dst = nodeMap[edge.target];
-    if (!src || !dst) continue;
-
-    const color = hexToVec3(RELATION_HEX[edge.relation] || '#64ffda');
-
-    // Dashed line
-    const points = [
-      new THREE.Vector3(src.x, src.y, src.z),
-      new THREE.Vector3(dst.x, dst.y, dst.z),
-    ];
-    const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
-    const lineMat = new THREE.LineBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.75,
-    });
-    graphGroup.add(new THREE.Line(lineGeo, lineMat));
-
-    // Midpoint relation label
-    const midX = (src.x + dst.x) / 2;
-    const midY = (src.y + dst.y) / 2 + 0.04;
-    const midZ = (src.z + dst.z) / 2;
-    const relSprite = makeLabel(edge.relation, [
-      Math.round(color.r * 255),
-      Math.round(color.g * 255),
-      Math.round(color.b * 255),
-    ], 0.6, 9);
-    relSprite.position.set(midX, midY, midZ);
-    graphGroup.add(relSprite);
-
-    // Arrow head
-    const arrowDir = new THREE.Vector3(dst.x - src.x, dst.y - src.y, dst.z - src.z).normalize();
-    const arrowGeo = new THREE.ConeGeometry(0.015, 0.05, 6);
-    const arrowMat = new THREE.MeshBasicMaterial({ color });
-    const arrow    = new THREE.Mesh(arrowGeo, arrowMat);
-    arrow.position.set(
-      dst.x - arrowDir.x * 0.06,
-      dst.y - arrowDir.y * 0.06,
-      dst.z - arrowDir.z * 0.06,
-    );
-    // Rotate cone to point along arrowDir
-    arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), arrowDir);
-    graphGroup.add(arrow);
-  }
-}
-
-// Canvas-based text sprite
-function makeLabel(text, colorArr = [200,200,200], scale = 1.0, fontSize = 11) {
-  const canvas  = document.createElement('canvas');
-  canvas.width  = 256;
-  canvas.height = 64;
-  const ctx     = canvas.getContext('2d');
-  ctx.clearRect(0, 0, 256, 64);
-
-  const r = colorArr[0], g = colorArr[1], b = colorArr[2];
-  ctx.fillStyle    = `rgba(${r},${g},${b},0.2)`;
-  ctx.roundRect    = ctx.roundRect || ((x,y,w,h,r) => ctx.rect(x,y,w,h));
-  ctx.beginPath();
-  ctx.roundRect(4, 20, 248, 36, 6);
-  ctx.fill();
-
-  ctx.font         = `bold ${fontSize}px 'Space Mono', monospace`;
-  ctx.fillStyle    = `rgb(${r},${g},${b})`;
-  ctx.textAlign    = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text.toUpperCase(), 128, 38);
-
-  const tex = new THREE.CanvasTexture(canvas);
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
-  const sp  = new THREE.Sprite(mat);
-  sp.scale.set(0.25 * scale, 0.06 * scale, 1);
-  return sp;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Master render function
-// ─────────────────────────────────────────────────────────────────────────────
-function renderScene(data) {
-    if (currentMode === MODES.RGB)   renderRGB(data.pointcloud);
-    if (currentMode === MODES.MESH)  renderMesh(data.mesh);
-    if (currentMode === MODES.GRAPH) renderGraph(data.graph);
-    if (currentMode === MODES.CAM)   renderCam(data.image);   // ← add
-    updateStats(data);
-    updateNodeList(data.graph);
-}
-
-function renderCam(b64) {
-    if (!b64) return;
-    document.getElementById('cam-img').src = 'data:image/jpeg;base64,' + b64;
-}
-
-function updateStats(data) {
-  const s = data.stats || {};
-  document.getElementById('s-frame').textContent = s.frame ?? '—';
-  document.getElementById('s-dets').textContent  = s.detections ?? '—';
-  document.getElementById('s-nodes').textContent = s.nodes ?? '—';
-  document.getElementById('s-edges').textContent = s.edges ?? '—';
-  document.getElementById('s-ms').textContent    = s.process_ms ? `${s.process_ms}ms` : '—';
-  const ptCount = data.pointcloud?.count ?? 0;
-  document.getElementById('s-pts').textContent   = ptCount.toLocaleString();
-}
-
-function updateNodeList(graphData) {
-  const list = document.getElementById('node-list');
-  list.innerHTML = '';
-  if (!graphData?.nodes) return;
-  for (const node of graphData.nodes) {
-    const [r, g, b] = node.color;
-    const card = document.createElement('div');
-    card.className = 'node-card';
-    card.style.setProperty('--node-color', `rgb(${r},${g},${b})`);
-    const [x, y, z] = node.position.map(v => v.toFixed(2));
-    card.innerHTML = `
-      <div class="nc-label">${node.label}</div>
-      <div class="nc-pos">${x}, ${y}, ${z} m</div>
-      <div class="nc-conf">${(node.confidence * 100).toFixed(0)}%</div>
-    `;
-    card.addEventListener('click', () => {
-      // Fly camera to node
-      target.set(+node.position[0], -node.position[1], -node.position[2]);
-      spherical.radius = 1.2;
-      updateCamera();
-    });
-    list.appendChild(card);
-  }
-}
-
-// ── Animation loop ────────────────────────────────────────────────────────────
-let t = 0;
-function animate() {
-  animFrame = requestAnimationFrame(animate);
-  t += 0.01;
-
-  if (rotating) {
-    spherical.theta += 0.004;
-    updateCamera();
-  }
-
-  // Pulse glow spheres in graph mode
-  if (currentMode === MODES.GRAPH) {
-    graphGroup.children.forEach(child => {
-      if (child.material?.opacity !== undefined && child.geometry?.type === 'SphereGeometry') {
-        const r = child.geometry.parameters.radius;
-        if (r > 0.05) child.material.opacity = 0.10 + 0.08 * Math.sin(t * 2);
-      }
-    });
-  }
-
-  renderer.render(scene, camera);
-}
-animate();
-
-// ── WebSocket connection ───────────────────────────────────────────────────────
-function connect() {
-  const url = document.getElementById('ws-url-input').value;
-  if (ws) { ws.close(); ws = null; }
-
-  setStatus('connecting', 'Connecting…');
-  ws = new WebSocket(url);
-
-  ws.onopen  = () => setStatus('connected', `Connected · ${url}`);
-  ws.onclose = () => setStatus('error',     'Disconnected — retry?');
-  ws.onerror = () => setStatus('error',     'Connection failed');
-
-  ws.onmessage = evt => {
-    try {
-      const msg = JSON.parse(evt.data);
-      if (msg.type === 'scene_update') renderScene(msg);
-    } catch(e) {
-      console.error('Parse error', e);
-    }
-  };
-}
-
-function setStatus(state, text) {
-  const dot  = document.getElementById('status-dot');
-  const span = document.getElementById('status-text');
-  dot.className  = state === 'connected' ? 'connected' : state === 'error' ? 'error' : '';
-  span.textContent = text;
-}
-
-document.getElementById('connect-btn').addEventListener('click', connect);
-
-// ── Resize ────────────────────────────────────────────────────────────────────
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+const ray=new THREE.Raycaster(),m2=new THREE.Vector2(),tt=document.getElementById('tt');
+renderer.domElement.addEventListener('mousemove',e=>{
+  if(currentMode!==MODES.graph){tt.style.display='none';return;}
+  const rc=renderer.domElement.getBoundingClientRect();
+  m2.x=((e.clientX-rc.left)/rc.width)*2-1;
+  m2.y=-((e.clientY-rc.top)/rc.height)*2+1;
+  ray.setFromCamera(m2,camera);
+  const hits=ray.intersectObjects(nG.children).filter(h=>h.object.userData.isNode);
+  if(hits.length){
+    const nd=hits[0].object.userData.nd;
+    document.getElementById('tt-label').textContent=nd.label+(nd.is_agent?' [AGENT]':'');
+    document.getElementById('tt-pos').textContent=(nd.position||[]).map(v=>v.toFixed(2)).join(', ')+'m';
+    document.getElementById('tt-conf').textContent=((nd.confidence||0)*100).toFixed(0)+'%';
+    document.getElementById('tt-count').textContent=nd.detection_count||'?';
+    document.getElementById('tt-first').textContent=nd.first_seen?new Date(nd.first_seen*1000).toLocaleTimeString():'—';
+    tt.style.display='block';
+    tt.style.left=(e.clientX-rc.left+14)+'px';
+    tt.style.top=(e.clientY-rc.top-10)+'px';
+  } else tt.style.display='none';
 });
 
-// Auto-connect on load
-setTimeout(connect, 500);
+// ── RGB + det tags ────────────────────────────────────────────────────────────
+const rgbImg=document.getElementById('rgb-img'), noFeed=document.getElementById('no-feed');
+function showRGB(b64){
+  if(!b64)return;
+  rgbImg.src='data:image/jpeg;base64,'+b64;
+  rgbImg.style.display='block'; noFeed.style.display='none';
+  const badge=document.getElementById('rgb-badge');
+  badge.textContent='LIVE'; badge.className='pbadge live';
+}
+function updDets(nodes){
+  const el=document.getElementById('det-tags'); el.innerHTML='';
+  if(!nodes)return;
+  nodes.filter(n=>!n.is_agent).slice(0,6).forEach(n=>{
+    const col=n.color||[160,160,160];
+    const hex='#'+col.map(c=>c.toString(16).padStart(2,'0')).join('');
+    const d=document.createElement('div'); d.className='det-tag';
+    d.style.borderLeftColor=hex;
+    d.innerHTML=`${n.label} <b>${((n.confidence||0)*100).toFixed(0)}%</b>`;
+    el.appendChild(d);
+  });
+}
 
-// ── Demo mode (no WebSocket): simulate data ────────────────────────────────────
-// Uncomment to test the visualizer without a live camera:
-/*
-setTimeout(() => {
-  const demo = {
-    type: 'scene_update',
-    stats: { frame: 42, detections: 3, nodes: 3, edges: 4, process_ms: 85 },
-    pointcloud: { points: [], colors: [], count: 0 },
-    mesh: { vertices: [], triangles: [], colors: [], normals: [], vertex_count: 0, triangle_count: 0 },
-    graph: {
-      nodes: [
-        { id: 'laptop_0_0', label: 'laptop',  position: [-0.2, 0.1, 1.2], confidence: 0.87, color: [80, 80, 255], bbox_min: [-0.28, 0.04, 1.14], bbox_max: [-0.12, 0.16, 1.26] },
-        { id: 'cup_1_4',    label: 'cup',     position: [ 0.2, 0.1, 1.0], confidence: 0.72, color: [255,200, 80], bbox_min: [ 0.16, 0.06, 0.96], bbox_max: [ 0.24, 0.14, 1.04] },
-        { id: 'book_2_3',   label: 'book',    position: [ 0.0, 0.2, 1.4], confidence: 0.65, color: [ 80,200,255], bbox_min: [-0.08, 0.14, 1.34], bbox_max: [ 0.08, 0.26, 1.46] },
-      ],
-      edges: [
-        { source: 'laptop_0_0', target: 'cup_1_4',   relation: 'near',       distance: 0.45, color: '#64ffda' },
-        { source: 'book_2_3',   target: 'laptop_0_0', relation: 'right_of',  distance: 0.20, color: '#40c4ff' },
-        { source: 'cup_1_4',    target: 'book_2_3',   relation: 'in_front_of', distance: 0.40, color: '#ea80fc' },
-        { source: 'book_2_3',   target: 'laptop_0_0', relation: 'on_top_of', distance: 0.05, color: '#ffff00' },
-      ]
-    }
-  };
-  renderScene(demo);
-  setStatus('connected', 'Demo mode');
-  setMode(MODES.GRAPH);
-}, 1000);
-*/
+// ── FPS ───────────────────────────────────────────────────────────────────────
+const FPS=new Array(20).fill(0); let lastT=null;
+function updFPS(ms){
+  FPS.shift(); FPS.push(ms>0?Math.min(30,Math.round(1000/ms)):0);
+  const bar=document.getElementById('fps-bar'); bar.innerHTML='';
+  FPS.forEach(f=>{const d=document.createElement('div');d.className='fd';
+    d.style.height=Math.max(2,Math.round(f/30*14))+'px';
+    d.style.background=f>15?'var(--accent)':f>5?'#ffaa00':'var(--accent2)';
+    bar.appendChild(d);});
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function updStats(msg){
+  const s=msg.stats||{};
+  document.getElementById('h-frame').textContent=s.frame||'—';
+  document.getElementById('h-dets').textContent=s.detections||'—';
+  document.getElementById('h-nodes').textContent=s.nodes||'—';
+  document.getElementById('h-edges').textContent=s.edges||'—';
+  document.getElementById('h-ms').textContent=s.process_ms||'—';
+  document.getElementById('b-cand').textContent=s.candidates??'—';
+  document.getElementById('b-events').textContent=s.events??'—';
+  document.getElementById('b-map').textContent=s.nodes??'—';
+}
+
+// ── Process message ───────────────────────────────────────────────────────────
+let latestMsg=null;
+function processMsg(msg){
+  const now=Date.now(); updFPS(lastT?now-lastT:0); lastT=now;
+  updStats(msg);
+  if(msg.image) showRGB(msg.image);
+  if(msg.graph){ renderGraph(msg.graph); updDets(msg.graph.nodes); }
+  if(msg.pointcloud) renderPCD(msg.pointcloud);
+  if(msg.mesh) renderMesh(msg.mesh);
+}
+setInterval(()=>{if(latestMsg){processMsg(latestMsg);latestMsg=null;}},50);
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+let ws=null;
+function setStatus(s){
+  document.getElementById('dot').className='dot'+(s==='live'?' live':s==='err'?' err':'');
+  document.getElementById('ws-label').textContent=s==='live'?'CONNECTED':s==='err'?'ERROR':'DISCONNECTED';
+}
+function connect(){
+  const url=document.getElementById('ws-url').value.trim();
+  if(ws){try{ws.close();}catch(e){} ws=null;}
+  try{
+    ws=new WebSocket(url);
+    ws.onopen=()=>setStatus('live');
+    ws.onclose=()=>setStatus('err');
+    ws.onerror=()=>setStatus('err');
+    ws.onmessage=evt=>{try{const m=JSON.parse(evt.data);if(m.type==='scene_update')latestMsg=m;}catch(e){}};
+  }catch(e){setStatus('err');}
+}
+document.getElementById('btn-connect').onclick=connect;
+document.getElementById('ws-url').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});
+setTimeout(connect,400);
 </script>
 </body>
 </html>

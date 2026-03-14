@@ -96,11 +96,11 @@ class ObjectDetector3D:
 
         h, w = rgb_image.shape[:2]
         results = self.model(
-            rgb_image,
-            conf=self.conf_thresh,
-            verbose=False,
-            device=self.device,
-        )
+             rgb_image,
+             conf=self.conf_thresh,
+             verbose=False,
+             device=self.device,
+         )
 
         detections: List[Detection3D] = []
         for r in results:
