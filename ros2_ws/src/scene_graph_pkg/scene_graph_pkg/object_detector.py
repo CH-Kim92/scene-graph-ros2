@@ -80,7 +80,7 @@ class ObjectDetector3D:
 
     def __init__(
         self,
-        text_prompt:          str   = "person, cup, bottle, laptop, chair, table",
+        text_prompt:          str   = "cup, laptop, chair, monitor",
         gdino_box_threshold:  float = 0.35,
         gdino_text_threshold: float = 0.25,
         clip_verify:          bool  = True,
