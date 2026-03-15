@@ -75,16 +75,23 @@ class WebSocketServer:
 class SceneGraphNode(Node):
     def __init__(self):
         super().__init__('scene_graph_node')
-        self.declare_parameter('yolo_model',         'yolov8m.pt')
-        self.declare_parameter('confidence',          0.45)
-        self.declare_parameter('near_threshold',      0.6)
-        self.declare_parameter('voxel_length',        0.02)
-        self.declare_parameter('ws_port',             8765)
-        self.declare_parameter('broadcast_hz',        5.0)
-        self.declare_parameter('mesh_every_n_frames', 30)
-
-        yolo_model   = self.get_parameter('yolo_model').value
-        confidence   = self.get_parameter('confidence').value
+        self.declare_parameter('text_prompt',          'person, cup, bottle, laptop, chair, table')
+        self.declare_parameter('gdino_box_threshold',  0.35)
+        self.declare_parameter('gdino_text_threshold', 0.25)
+        self.declare_parameter('clip_verify',          True)
+        self.declare_parameter('clip_threshold',       0.20)
+        self.declare_parameter('near_threshold',       0.6)
+        self.declare_parameter('voxel_length',         0.02)
+        self.declare_parameter('ws_port',              8766)
+        self.declare_parameter('broadcast_hz',         5.0)
+        self.declare_parameter('mesh_every_n_frames',  30)
+        # yolo_model   = self.get_parameter('yolo_model').value
+        # confidence   = self.get_parameter('confidence').value
+        text_prompt          = self.get_parameter('text_prompt').value
+        gdino_box_threshold  = self.get_parameter('gdino_box_threshold').value
+        gdino_text_threshold = self.get_parameter('gdino_text_threshold').value
+        clip_verify          = self.get_parameter('clip_verify').value
+        clip_threshold       = self.get_parameter('clip_threshold').value
         near_thresh  = self.get_parameter('near_threshold').value
         voxel_length = self.get_parameter('voxel_length').value
         ws_port      = self.get_parameter('ws_port').value
@@ -92,8 +99,13 @@ class SceneGraphNode(Node):
         self.mesh_every = self.get_parameter('mesh_every_n_frames').value
 
         self.bridge    = CvBridge() if CV_BRIDGE_OK else None
-        self.detector  = ObjectDetector3D(model_path=yolo_model,
-                                          confidence_threshold=confidence)
+        self.detector = ObjectDetector3D(
+    text_prompt=text_prompt,
+    gdino_box_threshold=gdino_box_threshold,
+    gdino_text_threshold=gdino_text_threshold,
+    clip_verify=clip_verify,
+    clip_threshold=clip_threshold,
+)
         self.sg        = SceneGraph3D(near_threshold=near_thresh)
         self.mesher    = MeshReconstructor(voxel_length=voxel_length)
         self.ws_server = WebSocketServer(port=ws_port)
@@ -334,7 +346,7 @@ class SceneGraphNode(Node):
             img_b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8') if ok else ''
         except Exception:
             img_b64 = ''
-            
+
         if mesh_dict: self._latest_mesh_dict = mesh_dict
         self.ws_server.broadcast({
             "type": "scene_update",

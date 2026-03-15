@@ -1,29 +1,19 @@
 services:
   scene_graph:
+    image: scene_graph:latest
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: scene_graph:latest
     container_name: scene_graph
-
-    # ── GPU ─────────────────────────────────────────────────────
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu, compute, utility, video]
-
-    # ── Environment ─────────────────────────────────────────────
+    network_mode: host
+    privileged: true
+    runtime: nvidia
     environment:
       - DISPLAY=${DISPLAY}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - ROS_DOMAIN_ID=0
       - FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds_localhost.xml
-
-    # ── Volumes ─────────────────────────────────────────────────
     volumes:
       - ../ros2_ws:/ros2_ws
       - ../viz:/viz
@@ -31,36 +21,31 @@ services:
       - /dev:/dev
       - /run/udev:/run/udev:ro
       - ../fastdds_localhost.xml:/fastdds_localhost.xml:ro
-      - scene_graph_data:/data
-
-    # ── Networking ──────────────────────────────────────────────
-    network_mode: host                       # ROS2 DDS needs host network
-
-    # ── Privileges ──────────────────────────────────────────────
-    privileged: true
-    ipc: host
-    devices:
-      - /dev/bus/usb/004/042:/dev/bus/usb/004/042
-    # ── Ports ───────────────────────────────────────────────────
-    # ports:
-    #   - "8080:8080"    # Web visualizer
-    #   - "8765:8765"    # WebSocket
-    # (disabled - using host network)
-
-    stdin_open: true
-    tty: true
-
-    # ── Default command ─────────────────────────────────────────
-    command: >
+      - ../docker/patch_gdino.py:/patch_gdino.py:ro
+    command: |
       bash -c "
         /opt/venv/bin/pip install -q 'numpy<2' 'opencv-python<4.10' &&
+        fuser -k 8766/tcp 2>/dev/null || true &&
+        rm -rf /tmp/GroundingDINO &&
+        echo 'Cloning GroundingDINO...' &&
+        git clone https://github.com/IDEA-Research/GroundingDINO.git /tmp/GroundingDINO &&
+        echo 'Patching CUDA source...' &&
+        /opt/venv/bin/python3 /patch_gdino.py &&
+        echo 'Compiling GroundingDINO...' &&
+        cd /tmp/GroundingDINO &&
+        TORCH_CUDA_ARCH_LIST=12.0 /opt/venv/bin/pip install --no-build-isolation -e . &&
+        echo 'CUDA ops compiled OK' &&
         source /opt/ros/jazzy/setup.bash &&
         cd /ros2_ws &&
         colcon build --symlink-install --packages-select scene_graph_pkg &&
         source install/setup.bash &&
-        export PYTHONPATH=/opt/venv/lib/python3.12/site-packages:$$PYTHONPATH &&
-        ros2 launch scene_graph_pkg scene_graph_nodriver.launch.py ws_port:=8766
+        export PYTHONPATH=/opt/venv/lib/python3.12/site-packages:/tmp/GroundingDINO:$$PYTHONPATH &&
+        ros2 launch scene_graph_pkg scene_graph_nodriver.launch.py ws_port:=8766 broadcast_hz:=5.0 gdino_box_threshold:=0.35 gdino_text_threshold:=0.25 clip_verify:=true 'text_prompt:=person, cup, bottle, laptop, chair, table, phone, keyboard'
       "
-
-volumes:
-  scene_graph_data:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

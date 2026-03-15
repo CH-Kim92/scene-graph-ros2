@@ -1,9 +1,9 @@
 # ============================================================
 # 3D Scene Graph - Docker Image
 # Base: CUDA 12.6 + Ubuntu 24.04 (Blackwell / RTX 5000 series)
-# Includes: ROS2 Jazzy, librealsense, Open3D, YOLOv8
+# Includes: ROS2 Jazzy, librealsense, Open3D, GroundingDINO, SAM2, CLIP
 # ============================================================
-FROM nvidia/cuda:12.6.3-devel-ubuntu24.04
+FROM nvidia/cuda:12.8.0-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
@@ -45,7 +45,6 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Intel RealSense SDK (librealsense2) ──────────────────────
-# Use Intel's official apt repo (supports L515)
 RUN mkdir -p /etc/apt/keyrings && \
     curl -sSf https://librealsense.intel.com/Debian/librealsense.pgp \
       | tee /etc/apt/keyrings/librealsense.pgp > /dev/null && \
@@ -65,19 +64,36 @@ RUN apt-get update && apt-get install -y \
     ros-jazzy-realsense2-description \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Python virtual environment (avoids debian package conflicts) ──────────
+# ── Python virtual environment ────────────────────────────────
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# ── Python ML/3D packages ─────────────────────────────────────────────────
+# ── PyTorch (CUDA 12.8 nightly for Blackwell RTX 5000) ───────
 RUN /opt/venv/bin/pip install --upgrade pip && \
     /opt/venv/bin/pip install \
       torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/nightly/cu128
 
-RUN /opt/venv/bin/pip install "numpy<2" "opencv-python<4.10" && \
+# ── Pin numpy<2 first (cv_bridge compiled against numpy 1.x) ─
+RUN /opt/venv/bin/pip install "numpy<2" "opencv-python<4.10"
+
+# ── GroundingDINO + SAM2 + CLIP ──────────────────────────────
+RUN /opt/venv/bin/pip install "transformers==4.38.2" && \
     /opt/venv/bin/pip install \
-      ultralytics \
+      open-clip-torch \
+      supervision \
+      accelerate
+
+RUN cd /tmp && \
+    git clone https://github.com/IDEA-Research/GroundingDINO.git && \
+    cd GroundingDINO && \
+    /opt/venv/bin/pip install --no-build-isolation -e .
+
+RUN /opt/venv/bin/pip install \
+    git+https://github.com/facebookresearch/sam2.git
+
+# ── Other ML / 3D packages ────────────────────────────────────
+RUN /opt/venv/bin/pip install \
       open3d \
       pyrealsense2 \
       numpy scipy \
@@ -94,22 +110,30 @@ RUN /opt/venv/bin/pip install "numpy<2" "opencv-python<4.10" && \
       empy \
       lark
 
-# ── ROS2 Python dependencies ─────────────────────────────────────────────
+# ── ROS2 Python dependencies ──────────────────────────────────
 RUN /opt/venv/bin/pip install "setuptools>=68.0"
 
-# ── rosdep init ──────────────────────────────────────────────
+# ── Download model weights ────────────────────────────────────
+RUN mkdir -p /weights && \
+    wget -q -O /weights/groundingdino_swint_ogc.pth \
+      "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth" && \
+    wget -q -O /weights/GroundingDINO_SwinT_OGC.py \
+      "https://raw.githubusercontent.com/IDEA-Research/GroundingDINO/main/groundingdino/config/GroundingDINO_SwinT_OGC.py" && \
+    wget -q -O /weights/sam2.1_hiera_large.pt \
+      "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
+
+# ── rosdep init ───────────────────────────────────────────────
 RUN PYTHONPATH="" rosdep init && PYTHONPATH=""
 
-# ── Workspace setup ──────────────────────────────────────────
+# ── Workspace setup ───────────────────────────────────────────
 WORKDIR /ros2_ws
 
-# Source ROS2 in every shell
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc && \
     echo "source /ros2_ws/install/setup.bash 2>/dev/null || true" >> /root/.bashrc
 
 # udev rules for RealSense
 COPY udev/99-realsense-libusb.rules /etc/udev/rules.d/
 
-EXPOSE 8080 8765
+EXPOSE 8080 8765 8766
 
 CMD ["/bin/bash"]
