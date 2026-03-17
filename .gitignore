@@ -19,3 +19,7 @@ docker/data/
 # Logs
 *.log
 .ros/
+
+# Claude Code / Anthropic memory & config
+.claude/
+!CLAUDE.md
